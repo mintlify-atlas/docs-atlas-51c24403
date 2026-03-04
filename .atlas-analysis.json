@@ -1,0 +1,180 @@
+{
+  "projectType": "data-platform",
+  "projectName": "YugabyteDB",
+  "projectDescription": "PostgreSQL-compatible distributed SQL database for cloud-native, mission-critical applications",
+  "theme": "aspen",
+  "primaryColor": "#fa6140",
+  "lightColor": "#ebb49b",
+  "darkColor": "#2c2434",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quick-start",
+              "installation",
+              "core-features"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/architecture",
+              "concepts/data-model",
+              "concepts/distributed-transactions",
+              "concepts/consistency-model",
+              "concepts/replication"
+            ]
+          },
+          {
+            "group": "Deployment",
+            "pages": [
+              "deploy/overview",
+              "deploy/docker",
+              "deploy/kubernetes",
+              "deploy/manual-deployment",
+              "deploy/multi-region",
+              "deploy/cloud-providers"
+            ]
+          },
+          {
+            "group": "Develop",
+            "pages": [
+              "develop/build-apps",
+              "develop/drivers-orms",
+              "develop/ysql-api",
+              "develop/ycql-api",
+              "develop/best-practices"
+            ]
+          },
+          {
+            "group": "Operations",
+            "pages": [
+              "operations/admin-guide",
+              "operations/backup-restore",
+              "operations/performance-tuning",
+              "operations/monitoring",
+              "operations/troubleshooting"
+            ]
+          },
+          {
+            "group": "Security",
+            "pages": [
+              "security/authentication",
+              "security/authorization",
+              "security/encryption-at-rest",
+              "security/encryption-in-transit",
+              "security/audit-logging"
+            ]
+          },
+          {
+            "group": "Advanced Features",
+            "pages": [
+              "advanced/change-data-capture",
+              "advanced/xcluster-replication",
+              "advanced/read-replicas",
+              "advanced/pgvector",
+              "advanced/parallel-queries"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "YSQL",
+            "pages": [
+              "api/ysql/overview",
+              "api/ysql/data-types",
+              "api/ysql/statements",
+              "api/ysql/functions",
+              "api/ysql/extensions"
+            ]
+          },
+          {
+            "group": "YCQL",
+            "pages": [
+              "api/ycql/overview",
+              "api/ycql/data-types",
+              "api/ycql/statements",
+              "api/ycql/functions"
+            ]
+          },
+          {
+            "group": "Client Drivers",
+            "pages": [
+              "api/client/java",
+              "api/client/python",
+              "api/client/nodejs",
+              "api/client/go",
+              "api/client/cpp"
+            ]
+          },
+          {
+            "group": "CLI Tools",
+            "pages": [
+              "api/cli/yugabyted",
+              "api/cli/ysqlsh",
+              "api/cli/ycqlsh",
+              "api/cli/yb-admin"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Reference",
+        "groups": [
+          {
+            "group": "Configuration",
+            "pages": [
+              "reference/configuration/yb-master",
+              "reference/configuration/yb-tserver",
+              "reference/configuration/yugabyted",
+              "reference/configuration/flags"
+            ]
+          },
+          {
+            "group": "System Tables",
+            "pages": [
+              "reference/system-tables/ysql",
+              "reference/system-tables/ycql"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "PostgreSQL-compatible distributed SQL",
+    "Multi-region deployments with xCluster replication",
+    "Distributed ACID transactions with Spanner-inspired architecture",
+    "Horizontal scalability with automatic sharding",
+    "High availability with Raft consensus",
+    "Multi-API support (YSQL and YCQL)",
+    "Change Data Capture (CDC)",
+    "Vector search with pgvector extension",
+    "Read replicas and follower reads",
+    "Encryption at rest and in transit"
+  ],
+  "publicApiSurface": [
+    "YSQL API (PostgreSQL-compatible SQL)",
+    "YCQL API (Cassandra-compatible API)",
+    "YBClient (Java client library)",
+    "YugabyteDB C++ Client",
+    "Python driver (psycopg2, asyncpg)",
+    "Node.js driver (pg, cassandra-driver)",
+    "Go driver (pgx, gocql)",
+    "yugabyted (CLI for cluster management)",
+    "yb-admin (CLI for advanced operations)",
+    "ysqlsh (PostgreSQL shell)",
+    "ycqlsh (CQL shell)",
+    "REST Admin API",
+    "CDC Connector API",
+    "Backup/Restore API"
+  ]
+}
