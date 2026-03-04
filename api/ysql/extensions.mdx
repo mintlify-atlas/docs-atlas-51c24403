@@ -1,0 +1,601 @@
+---
+title: YSQL Extensions
+headerTitle: PostgreSQL Extensions
+linkTitle: Extensions
+description: PostgreSQL extensions supported in YugabyteDB YSQL
+---
+
+PostgreSQL extensions provide a way to extend database functionality by bundling SQL objects into a package. YugabyteDB supports a wide variety of PostgreSQL extensions, both pre-bundled and installable.
+
+## Extension Categories
+
+Extensions are categorized based on their availability:
+
+- **Pre-bundled** - Included in YugabyteDB distribution, enable with `CREATE EXTENSION`
+- **Third-party** - Require manual installation before enabling
+- **YugabyteDB-specific** - Built specifically for YugabyteDB features
+
+## Working with Extensions
+
+### Enable an Extension
+
+```sql
+-- Check available extensions
+SELECT * FROM pg_available_extensions ORDER BY name;
+
+-- Create extension
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+-- List installed extensions
+\dx
+
+-- Or use SQL
+SELECT * FROM pg_extension;
+```
+
+### Drop an Extension
+
+```sql
+DROP EXTENSION pgcrypto;
+
+-- Drop with dependencies
+DROP EXTENSION pgcrypto CASCADE;
+```
+
+## Pre-bundled Extensions
+
+### Cryptographic Extensions
+
+#### pgcrypto
+
+Provides cryptographic functions for hashing, encryption, and random number generation.
+
+```sql
+CREATE EXTENSION pgcrypto;
+
+-- Password hashing
+SELECT crypt('mypassword', gen_salt('bf'));
+
+-- Verify password
+SELECT crypt('mypassword', stored_hash) = stored_hash AS password_valid
+FROM users WHERE username = 'alice';
+
+-- Generate UUID
+SELECT gen_random_uuid();
+
+-- Hash functions
+SELECT 
+  digest('data', 'sha256') AS sha256,
+  encode(digest('data', 'sha512'), 'hex') AS sha512_hex;
+
+-- Encryption/Decryption
+SELECT 
+  pgp_sym_encrypt('secret data', 'encryption_key') AS encrypted,
+  pgp_sym_decrypt(
+    pgp_sym_encrypt('secret data', 'encryption_key'),
+    'encryption_key'
+  ) AS decrypted;
+```
+
+#### uuid-ossp
+
+Generates universally unique identifiers (UUIDs).
+
+<ParamField path="uuid_generate_v1" type="function">
+  Generates UUID using timestamp and MAC address.
+</ParamField>
+
+<ParamField path="uuid_generate_v4" type="function">
+  Generates random UUID (recommended for most use cases).
+</ParamField>
+
+```sql
+CREATE EXTENSION "uuid-ossp";
+
+CREATE TABLE users (
+  user_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  username TEXT NOT NULL,
+  created_at TIMESTAMP DEFAULT now()
+);
+
+INSERT INTO users (username) VALUES ('alice');
+
+-- Different UUID versions
+SELECT 
+  uuid_generate_v1() AS uuid_v1,
+  uuid_generate_v4() AS uuid_v4,
+  uuid_generate_v1mc() AS uuid_v1mc;
+```
+
+### Data Type Extensions
+
+#### hstore
+
+Key-value store within a single PostgreSQL value.
+
+```sql
+CREATE EXTENSION hstore;
+
+CREATE TABLE products (
+  product_id SERIAL PRIMARY KEY,
+  name TEXT,
+  attributes HSTORE
+);
+
+INSERT INTO products (name, attributes) VALUES (
+  'Laptop',
+  'brand=>"Dell", ram=>"16GB", cpu=>"Intel i7"'::hstore
+);
+
+-- Query hstore
+SELECT 
+  name,
+  attributes->'brand' AS brand,
+  attributes->'ram' AS ram
+FROM products;
+
+-- Search in hstore
+SELECT * FROM products 
+WHERE attributes @> 'brand=>"Dell"'::hstore;
+
+CREATE INDEX idx_attributes ON products USING gin(attributes);
+```
+
+#### citext
+
+Case-insensitive text type.
+
+```sql
+CREATE EXTENSION citext;
+
+CREATE TABLE users (
+  user_id SERIAL PRIMARY KEY,
+  email CITEXT UNIQUE NOT NULL
+);
+
+INSERT INTO users (email) VALUES ('Alice@Example.com');
+
+-- Case-insensitive comparison
+SELECT * FROM users WHERE email = 'alice@example.com';
+-- Returns the row even though case differs
+```
+
+### Full-Text Search
+
+#### pg_trgm
+
+Trigram-based text similarity matching.
+
+```sql
+CREATE EXTENSION pg_trgm;
+
+CREATE TABLE documents (
+  doc_id SERIAL PRIMARY KEY,
+  title TEXT,
+  content TEXT
+);
+
+-- Create GIN index for fast similarity search
+CREATE INDEX idx_title_trgm ON documents USING gin(title gin_trgm_ops);
+
+-- Similarity search
+SELECT 
+  title,
+  similarity(title, 'PostgreSQL') AS sim
+FROM documents
+WHERE title % 'PostgreSQL'  -- % is similarity operator
+ORDER BY sim DESC;
+
+-- Fuzzy search
+SELECT * FROM documents
+WHERE title ILIKE '%postgre%';
+```
+
+#### fuzzystrmatch
+
+Fuzzy string matching functions.
+
+```sql
+CREATE EXTENSION fuzzystrmatch;
+
+-- Levenshtein distance
+SELECT levenshtein('hello', 'hallo') AS distance;  -- 1
+
+-- Soundex (phonetic matching)
+SELECT 
+  soundex('Smith') AS soundex1,
+  soundex('Smyth') AS soundex2,
+  soundex('Smith') = soundex('Smyth') AS match;
+
+-- Metaphone
+SELECT metaphone('Catherine', 10) AS metaphone;
+```
+
+### Monitoring Extensions
+
+#### pg_stat_statements
+
+Tracks execution statistics of SQL statements.
+
+```sql
+CREATE EXTENSION pg_stat_statements;
+
+-- View query statistics
+SELECT 
+  query,
+  calls,
+  total_exec_time,
+  mean_exec_time,
+  rows
+FROM pg_stat_statements
+ORDER BY total_exec_time DESC
+LIMIT 10;
+
+-- Reset statistics
+SELECT pg_stat_statements_reset();
+```
+
+### Foreign Data Wrappers
+
+#### postgres_fdw
+
+Access remote PostgreSQL/YugabyteDB databases.
+
+```sql
+CREATE EXTENSION postgres_fdw;
+
+-- Create foreign server
+CREATE SERVER remote_db
+FOREIGN DATA WRAPPER postgres_fdw
+OPTIONS (host '192.168.1.100', port '5433', dbname 'remote_database');
+
+-- Create user mapping
+CREATE USER MAPPING FOR current_user
+SERVER remote_db
+OPTIONS (user 'remote_user', password 'remote_password');
+
+-- Create foreign table
+CREATE FOREIGN TABLE remote_users (
+  user_id INT,
+  username TEXT,
+  email TEXT
+)
+SERVER remote_db
+OPTIONS (schema_name 'public', table_name 'users');
+
+-- Query foreign table
+SELECT * FROM remote_users;
+
+-- Join local and remote data
+SELECT 
+  l.order_id,
+  l.total,
+  r.username
+FROM local_orders l
+JOIN remote_users r ON l.user_id = r.user_id;
+```
+
+#### file_fdw
+
+Read data from files on the server.
+
+```sql
+CREATE EXTENSION file_fdw;
+
+CREATE SERVER file_server
+FOREIGN DATA WRAPPER file_fdw;
+
+CREATE FOREIGN TABLE csv_data (
+  id INT,
+  name TEXT,
+  value NUMERIC
+)
+SERVER file_server
+OPTIONS (filename '/tmp/data.csv', format 'csv', header 'true');
+
+SELECT * FROM csv_data;
+```
+
+### Advanced Extensions
+
+#### pgvector
+
+Vector similarity search for AI/ML applications.
+
+```sql
+CREATE EXTENSION vector;
+
+CREATE TABLE embeddings (
+  id SERIAL PRIMARY KEY,
+  content TEXT,
+  embedding VECTOR(384)  -- 384-dimensional vector
+);
+
+-- Insert vectors
+INSERT INTO embeddings (content, embedding) VALUES
+  ('Hello world', '[0.1, 0.2, 0.3, ...]'),
+  ('Machine learning', '[0.4, 0.5, 0.6, ...]');
+
+-- Create HNSW index for fast similarity search
+CREATE INDEX ON embeddings 
+USING hnsw (embedding vector_cosine_ops);
+
+-- Vector similarity search
+SELECT 
+  content,
+  embedding <=> '[0.1, 0.2, 0.3, ...]'::vector AS distance
+FROM embeddings
+ORDER BY distance
+LIMIT 5;
+```
+
+#### pg_cron
+
+Schedule jobs using cron syntax.
+
+```sql
+CREATE EXTENSION pg_cron;
+
+-- Schedule daily cleanup at 2 AM
+SELECT cron.schedule(
+  'daily-cleanup',
+  '0 2 * * *',
+  $$DELETE FROM logs WHERE created_at < now() - INTERVAL '30 days'$$
+);
+
+-- Schedule every 5 minutes
+SELECT cron.schedule(
+  'refresh-stats',
+  '*/5 * * * *',
+  $$REFRESH MATERIALIZED VIEW daily_stats$$
+);
+
+-- View scheduled jobs
+SELECT * FROM cron.job;
+
+-- Unschedule job
+SELECT cron.unschedule('daily-cleanup');
+```
+
+#### pg_partman
+
+Automate table partitioning management.
+
+```sql
+CREATE EXTENSION pg_partman;
+
+-- Create parent table
+CREATE TABLE events (
+  event_id BIGSERIAL,
+  event_time TIMESTAMP NOT NULL,
+  event_type TEXT,
+  data JSONB
+) PARTITION BY RANGE (event_time);
+
+-- Setup partitioning
+SELECT partman.create_parent(
+  p_parent_table := 'public.events',
+  p_control := 'event_time',
+  p_type := 'native',
+  p_interval := 'daily',
+  p_premake := 7
+);
+
+-- Run maintenance
+SELECT partman.run_maintenance();
+```
+
+### Security Extensions
+
+#### pgaudit
+
+Provides detailed audit logging.
+
+```sql
+CREATE EXTENSION pgaudit;
+
+-- Configure audit logging
+SET pgaudit.log = 'write, ddl';
+SET pgaudit.log_relation = on;
+
+-- All writes and DDL are now logged
+INSERT INTO users (username) VALUES ('alice');
+-- Logged: INSERT INTO users...
+
+CREATE TABLE new_table (id INT);
+-- Logged: CREATE TABLE new_table...
+```
+
+#### postgresql_anonymizer
+
+Mask or anonymize sensitive data.
+
+```sql
+CREATE EXTENSION anon CASCADE;
+
+SELECT anon.init();
+
+-- Define anonymization rules
+SECURITY LABEL FOR anon ON COLUMN users.email 
+IS 'MASKED WITH FUNCTION anon.fake_email()';
+
+SECURITY LABEL FOR anon ON COLUMN users.phone 
+IS 'MASKED WITH FUNCTION anon.partial(phone, 2, $$XXX-XXX-$$, 2)';
+
+-- Create anonymized view
+CREATE MATERIALIZED VIEW anonymized_users AS
+SELECT * FROM users;
+```
+
+### Utility Extensions
+
+#### tablefunc
+
+Provides crosstab and other table functions.
+
+```sql
+CREATE EXTENSION tablefunc;
+
+-- Pivot table example
+SELECT * FROM crosstab(
+  $$SELECT region, quarter, sales FROM sales_data ORDER BY 1, 2$$,
+  $$SELECT DISTINCT quarter FROM sales_data ORDER BY 1$$
+) AS ct(region TEXT, q1 NUMERIC, q2 NUMERIC, q3 NUMERIC, q4 NUMERIC);
+
+-- Generate normal distribution
+SELECT * FROM normal_rand(1000, 100, 15) AS value;
+```
+
+## YugabyteDB-Specific Extensions
+
+These extensions are built specifically for YugabyteDB.
+
+### yb_pg_metrics
+
+Tracks execution statistics of YSQL statements.
+
+```sql
+CREATE EXTENSION yb_pg_metrics;
+
+-- View query metrics
+SELECT 
+  query,
+  calls,
+  total_time,
+  rows_fetched
+FROM yb_pg_stat_statements
+ORDER BY total_time DESC
+LIMIT 10;
+```
+
+### yb_xcluster_ddl_replication
+
+Enables DDL replication for xCluster.
+
+```sql
+CREATE EXTENSION yb_xcluster_ddl_replication;
+
+-- DDL changes are now replicated to xCluster targets
+CREATE TABLE replicated_table (id INT PRIMARY KEY);
+```
+
+### yb_ycql_utils
+
+Utilities for YCQL-YSQL interoperability.
+
+```sql
+CREATE EXTENSION yb_ycql_utils;
+
+-- Access YCQL tables from YSQL
+SELECT * FROM ycql_table;
+```
+
+## Third-Party Extensions
+
+These require installation before use.
+
+### Apache AGE
+
+Graph database extension.
+
+```sql
+-- After installation
+CREATE EXTENSION age;
+
+LOAD 'age';
+SET search_path = ag_catalog, "$user", public;
+
+-- Create graph
+SELECT create_graph('social_network');
+
+-- Create vertices and edges
+SELECT * FROM cypher('social_network', $$
+  CREATE (p:Person {name: 'Alice', age: 30})
+$$) as (v agtype);
+```
+
+### PostGIS
+
+Geospatial data support (requires installation).
+
+```sql
+CREATE EXTENSION postgis;
+
+CREATE TABLE locations (
+  location_id SERIAL PRIMARY KEY,
+  name TEXT,
+  coordinates GEOMETRY(POINT, 4326)
+);
+
+INSERT INTO locations (name, coordinates) VALUES
+  ('San Francisco', ST_GeomFromText('POINT(-122.4194 37.7749)', 4326));
+
+-- Spatial query
+SELECT name 
+FROM locations
+WHERE ST_DWithin(
+  coordinates::geography,
+  ST_GeomFromText('POINT(-122.4 37.7)', 4326)::geography,
+  10000  -- 10km
+);
+```
+
+### Orafce
+
+Oracle compatibility functions.
+
+```sql
+CREATE EXTENSION orafce;
+
+-- Oracle-style functions now available
+SELECT 
+  nvl(null, 'default') AS nvl_result,
+  add_months(CURRENT_DATE, 3) AS three_months_later,
+  last_day(CURRENT_DATE) AS end_of_month;
+```
+
+## Extension Management
+
+### Check Extension Version
+
+```sql
+SELECT 
+  extname,
+  extversion,
+  extrelocatable
+FROM pg_extension;
+```
+
+### Update Extension
+
+```sql
+-- Check available versions
+SELECT * FROM pg_available_extension_versions 
+WHERE name = 'pgcrypto';
+
+-- Update to new version
+ALTER EXTENSION pgcrypto UPDATE TO '1.3';
+```
+
+### Extension Dependencies
+
+```sql
+-- Create extension with dependencies
+CREATE EXTENSION earthdistance CASCADE;
+-- Automatically creates required 'cube' extension
+```
+
+## Best Practices
+
+1. **Always use IF NOT EXISTS** when creating extensions in scripts
+2. **Test extensions** in development before production use
+3. **Monitor performance impact** of extensions like pg_stat_statements
+4. **Keep extensions updated** to latest compatible versions
+5. **Document extension usage** in your application
+
+## Additional Resources
+
+- [PostgreSQL Extensions Documentation](https://www.postgresql.org/docs/15/contrib.html)
+- [YugabyteDB Extensions Guide](https://docs.yugabyte.com/stable/explore/ysql-language-features/pg-extensions/)
+- [YSQL Overview](/api/ysql/overview)
+- [YSQL Functions](/api/ysql/functions)

@@ -1,0 +1,695 @@
+---
+title: ycqlsh
+description: YCQL shell for interacting with YugabyteDB
+---
+
+`ycqlsh` is the command-line shell for interacting with YugabyteDB using the YCQL API (Cassandra-compatible).
+
+## Synopsis
+
+```bash
+ycqlsh [flags] [host [port]]
+```
+
+## Description
+
+ycqlsh is a Python-based command-line interface for interacting with YugabyteDB using YCQL (Yugabyte Cloud Query Language). It provides:
+- Interactive CQL query execution
+- Data import/export capabilities
+- Cluster administration commands
+- Scriptable operations
+
+## Requirements
+
+Python 3.6 or later must be installed.
+
+## Installation
+
+ycqlsh is installed with YugabyteDB and located in the `bin` directory. A standalone version is also available through the YugabyteDB clients package.
+
+## Default Connection Parameters
+
+- Host: `127.0.0.1` (localhost)
+- Port: `9042`
+- Username: Not required for insecure clusters
+
+## Starting ycqlsh
+
+```bash
+# Connect to local cluster
+./bin/ycqlsh
+
+# Connect to remote host
+./bin/ycqlsh 192.168.1.100
+
+# Connect to specific host and port
+./bin/ycqlsh 192.168.1.100 9042
+```
+
+## Command-Line Flags
+
+### Connection Flags
+
+#### -u, --user=USERNAME
+
+Username to authenticate with.
+
+```bash
+ycqlsh -u cassandra
+```
+
+#### -p, --password=PASSWORD
+
+Password to authenticate with.
+
+```bash
+ycqlsh -u cassandra -p mypassword
+```
+
+**Security Warning**: Passing passwords on command line is insecure. Use password prompt instead:
+
+```bash
+ycqlsh -u cassandra
+Password: 
+```
+
+#### -k, --keyspace=KEYSPACE
+
+Authenticate to a specific keyspace.
+
+```bash
+ycqlsh -u cassandra -k my_keyspace
+```
+
+#### --ssl
+
+Use SSL when connecting to YugabyteDB.
+
+```bash
+ycqlsh --ssl 192.168.1.100
+```
+
+### Query Execution Flags
+
+#### -e, --execute=STATEMENT
+
+Execute a single CQL statement and exit.
+
+```bash
+ycqlsh -e "SELECT * FROM system.local"
+ycqlsh -e "DESCRIBE KEYSPACES"
+```
+
+#### -f, --file=FILENAME
+
+Execute CQL commands from a file and exit.
+
+```bash
+ycqlsh -f schema.cql
+ycqlsh -f /path/to/script.cql -k my_keyspace
+```
+
+### Output Formatting Flags
+
+#### -C, --color
+
+Force color output.
+
+```bash
+ycqlsh -C
+```
+
+#### --no-color
+
+Disable color output.
+
+```bash
+ycqlsh --no-color
+```
+
+#### --browser=BROWSER
+
+Specify browser for displaying help.
+
+```bash
+ycqlsh --browser=firefox
+ycqlsh --browser='/usr/bin/google-chrome %s'
+```
+
+### Connection Options
+
+#### --connect-timeout=SECONDS
+
+Connection timeout in seconds (default: 2).
+
+```bash
+ycqlsh --connect-timeout=5
+```
+
+#### --request-timeout=SECONDS
+
+Request timeout in seconds (default: 10).
+
+```bash
+ycqlsh --request-timeout=30
+```
+
+### Behavior Flags
+
+#### -t, --tty
+
+Force TTY mode (command prompt).
+
+```bash
+ycqlsh -t
+```
+
+#### --debug
+
+Print additional debugging information.
+
+```bash
+ycqlsh --debug
+```
+
+#### --encoding=ENCODING
+
+Specify output encoding (default: UTF-8).
+
+```bash
+ycqlsh --encoding=utf-8
+```
+
+#### --cqlshrc=FILE
+
+Specify location of cqlshrc configuration file.
+
+```bash
+ycqlsh --cqlshrc=/path/to/cqlshrc
+```
+
+Default: `~/.cassandra/cqlshrc`
+
+#### -r, --refresh_on_describe
+
+Force refresh of schema metadata on DESCRIBE commands.
+
+```bash
+ycqlsh -r
+```
+
+## Special Commands
+
+In addition to CQL statements, ycqlsh supports special commands:
+
+### CAPTURE
+
+Capture command output to a file.
+
+```cql
+CAPTURE 'output.txt'
+SELECT * FROM users;
+CAPTURE OFF
+```
+
+View current capture configuration:
+```cql
+CAPTURE
+```
+
+### CLEAR / CLS
+
+Clear the console.
+
+```cql
+CLEAR
+CLS
+```
+
+### CONSISTENCY
+
+Set or view consistency level for read operations.
+
+```cql
+-- Set consistency level
+CONSISTENCY QUORUM
+CONSISTENCY ONE
+
+-- View current consistency
+CONSISTENCY
+```
+
+**Consistency Levels**:
+- `QUORUM`: Read from tablet leader with strong consistency (default)
+- `ONE`: Read from follower with relaxed consistency
+
+### COPY FROM
+
+Import data from CSV file to table.
+
+```cql
+COPY users (id, name, email) FROM 'users.csv';
+COPY users FROM 'users.csv' WITH HEADER=true;
+COPY users FROM STDIN;
+```
+
+**Flags**:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `INGESTRATE` | 100000 | Max rows per second |
+| `MAXROWS` | -1 | Max rows to import (-1 = unlimited) |
+| `SKIPROWS` | 0 | Number of initial rows to skip |
+| `SKIPCOLS` | | Comma-separated columns to ignore |
+| `MAXPARSEERRORS` | -1 | Max parsing errors (-1 = unlimited) |
+| `MAXINSERTERRORS` | 1000 | Max insert errors (-1 = unlimited) |
+| `ERRFILE` | | File to store failed rows |
+| `MAXBATCHSIZE` | 20 | Max rows per batch |
+| `MINBATCHSIZE` | 2 | Min rows per batch |
+| `CHUNKSIZE` | 1000 | Rows passed to workers at a time |
+
+Example:
+```cql
+COPY users FROM 'data.csv' 
+WITH HEADER=true 
+AND MAXROWS=10000 
+AND MAXBATCHSIZE=50;
+```
+
+### COPY TO
+
+Export data from table to CSV file.
+
+```cql
+COPY users TO 'users.csv';
+COPY users (id, name) TO 'users_subset.csv';
+COPY users TO STDOUT;
+```
+
+**Flags**:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `MAXREQUESTS` | 6 | Max token ranges to fetch simultaneously |
+| `PAGESIZE` | 1000 | Rows to fetch in a single page |
+| `PAGETIMEOUT` | 10 | Timeout in seconds per 1000 entries |
+| `BEGINTOKEN` | | Start token for export range |
+| `ENDTOKEN` | | End token for export range |
+| `MAXOUTPUTSIZE` | -1 | Max output file lines (-1 = unlimited) |
+| `ENCODING` | utf8 | Character encoding |
+
+**Common flags for both COPY TO and FROM**:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `NULLVAL` | null | String placeholder for null values |
+| `HEADER` | false | Include column headers |
+| `DELIMITER` | , | Field delimiter |
+| `QUOTE` | " | Quote character |
+| `ESCAPE` | \\ | Escape character |
+| `NUMPROCESSES` | | Number of worker processes |
+
+Example:
+```cql
+COPY users TO 'users.csv' 
+WITH HEADER=true 
+AND DELIMITER='|' 
+AND PAGESIZE=5000;
+```
+
+### DESCRIBE / DESC
+
+Describe database objects.
+
+```cql
+-- List all keyspaces
+DESCRIBE KEYSPACES
+
+-- Describe specific keyspace
+DESCRIBE KEYSPACE my_keyspace
+
+-- List tables in current keyspace
+DESCRIBE TABLES
+
+-- Describe specific table
+DESCRIBE TABLE users
+
+-- Describe all objects
+DESCRIBE FULL SCHEMA
+
+-- Describe cluster
+DESCRIBE CLUSTER
+```
+
+Short form:
+```cql
+DESC KEYSPACES
+DESC TABLE users
+```
+
+### EXPAND / NOEXPAND
+
+Toggle expanded output format.
+
+```cql
+EXPAND ON
+SELECT * FROM users;
+
+NOEXPAND
+```
+
+### EXIT / QUIT
+
+Exit ycqlsh.
+
+```cql
+EXIT
+QUIT
+```
+
+### HELP
+
+Display help information.
+
+```cql
+HELP
+HELP COPY
+HELP CONSISTENCY
+```
+
+### PAGING
+
+Control result paging.
+
+```cql
+-- Enable paging
+PAGING ON
+
+-- Disable paging
+PAGING OFF
+
+-- Check paging status
+PAGING
+```
+
+### SHOW
+
+Show current session settings.
+
+```cql
+-- Show version
+SHOW VERSION
+
+-- Show current host
+SHOW HOST
+
+-- Show current session info
+SHOW SESSION
+```
+
+### SOURCE
+
+Execute commands from a file.
+
+```cql
+SOURCE 'schema.cql'
+SOURCE '/path/to/script.cql'
+```
+
+### TRACING
+
+Enable or disable query tracing.
+
+```cql
+-- Enable tracing
+TRACING ON
+
+-- Disable tracing
+TRACING OFF
+
+-- Check tracing status
+TRACING
+```
+
+## Common Usage Examples
+
+### Connect to Cluster
+
+```bash
+# Local cluster
+ycqlsh
+
+# Remote cluster
+ycqlsh 192.168.1.100
+
+# Specific port
+ycqlsh 192.168.1.100 9042
+
+# With authentication
+ycqlsh -u cassandra -k my_keyspace
+
+# With SSL
+ycqlsh --ssl 192.168.1.100
+```
+
+### Execute Queries
+
+```bash
+# Single query
+ycqlsh -e "SELECT * FROM system.local"
+
+# Query with output
+ycqlsh -e "SELECT cluster_name, data_center, rack FROM system.local" > cluster_info.txt
+
+# From file
+ycqlsh -f schema.cql
+```
+
+### Create Keyspace and Table
+
+```cql
+ycqlsh> CREATE KEYSPACE IF NOT EXISTS store 
+        WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 3};
+
+ycqlsh> USE store;
+
+ycqlsh:store> CREATE TABLE products (
+              product_id UUID PRIMARY KEY,
+              name TEXT,
+              price DECIMAL,
+              category TEXT
+              );
+
+ycqlsh:store> DESCRIBE TABLE products;
+```
+
+### Import/Export Data
+
+```bash
+# Export to CSV
+ycqlsh -e "COPY store.products TO 'products.csv' WITH HEADER=true"
+
+# Import from CSV
+ycqlsh -e "COPY store.products FROM 'products.csv' WITH HEADER=true"
+
+# Export to stdout
+ycqlsh -e "COPY store.products TO STDOUT" > products.csv
+```
+
+### Save Query Results
+
+```bash
+# Method 1: Using --execute
+ycqlsh -e "SELECT * FROM store.products" > results.txt
+
+# Method 2: Using CAPTURE in interactive mode
+ycqlsh <<EOF
+USE store;
+CAPTURE 'results.txt'
+SELECT * FROM products;
+CAPTURE OFF
+EOF
+```
+
+### Batch Operations
+
+```cql
+ycqlsh:store> BEGIN BATCH
+              INSERT INTO products (product_id, name, price) 
+              VALUES (uuid(), 'Laptop', 999.99);
+              INSERT INTO products (product_id, name, price) 
+              VALUES (uuid(), 'Mouse', 19.99);
+              APPLY BATCH;
+```
+
+### Schema Management
+
+```bash
+# Export schema
+ycqlsh -e "DESCRIBE FULL SCHEMA" > schema_backup.cql
+
+# Export keyspace schema
+ycqlsh -e "DESCRIBE KEYSPACE store" > store_schema.cql
+
+# Restore schema
+ycqlsh -f schema_backup.cql
+```
+
+## Interactive Mode
+
+When started without `-e` or `-f`, ycqlsh enters interactive mode:
+
+```bash
+$ ycqlsh
+Connected to local cluster at 127.0.0.1:9042.
+[ycqlsh 5.0.1 | Cassandra 3.9-SNAPSHOT | CQL spec 3.4.2 | Native protocol v4]
+Use HELP for help.
+ycqlsh> 
+```
+
+Features:
+- Command history (arrow keys)
+- Tab completion for keywords and table names
+- Multi-line statement editing
+- Color-coded output
+
+```cql
+ycqlsh> USE store;
+ycqlsh:store> SELECT * FROM products 
+            WHERE category = 'Electronics' 
+            LIMIT 10;
+
+ycqlsh:store> \q  -- Exit
+```
+
+## Configuration File
+
+Create `~/.cassandra/cqlshrc` to customize ycqlsh:
+
+```ini
+[authentication]
+username = cassandra
+password = mypassword
+
+[connection]
+hostname = 127.0.0.1
+port = 9042
+timeout = 30
+
+[ui]
+color = on
+completer_mode = on
+encoding = utf-8
+
+[cql]
+version = 3.4.2
+```
+
+## Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `CQLSH_HOST` | Default host to connect to |
+| `CQLSH_PORT` | Default port to connect to |
+| `CQLSH_NO_BUNDLED` | Use system Python packages |
+
+## Output Examples
+
+### Standard Output
+
+```cql
+ycqlsh> SELECT * FROM system.local;
+
+ key   | bootstrapped | cluster_name  | data_center | rack  | release_version
+-------+--------------+---------------+-------------+-------+-----------------
+ local | COMPLETED    | local cluster | datacenter1 | rack1 | 3.9-SNAPSHOT
+
+(1 rows)
+```
+
+### Expanded Output
+
+```cql
+ycqlsh> EXPAND ON
+Now Expanded output is enabled
+ycqlsh> SELECT * FROM system.local;
+
+@ Row 1
+-----------------+---------------
+ key              | local
+ bootstrapped     | COMPLETED
+ cluster_name     | local cluster
+ data_center      | datacenter1
+ rack             | rack1
+ release_version  | 3.9-SNAPSHOT
+
+(1 rows)
+```
+
+### CSV Output
+
+```bash
+$ ycqlsh -e "COPY system.local TO STDOUT WITH HEADER=true"
+key,bootstrapped,cluster_name,data_center,rack,release_version
+local,COMPLETED,local cluster,datacenter1,rack1,3.9-SNAPSHOT
+```
+
+## Security Considerations
+
+1. **Password Security**: Don't use `-p` flag with password in scripts. Use `.cassandra/cqlshrc` with proper permissions:
+   ```bash
+   chmod 600 ~/.cassandra/cqlshrc
+   ```
+
+2. **SSL Connections**: Use `--ssl` flag for encrypted connections.
+
+3. **Command History**: Sensitive data may be stored in `~/.cassandra/cqlsh_history`. Clear if needed:
+   ```bash
+   rm ~/.cassandra/cqlsh_history
+   ```
+
+## Troubleshooting
+
+### Connection Refused
+
+```bash
+# Check if YB-TServer is running
+ps aux | grep yb-tserver
+
+# Verify port is correct
+netstat -an | grep 9042
+
+# Test connection
+telnet localhost 9042
+```
+
+### Import Errors
+
+```bash
+# Enable debug mode
+ycqlsh --debug -e "COPY table FROM 'file.csv'"
+
+# Check error file
+cat import_keyspace_table.err
+```
+
+### Python Version
+
+```bash
+# Check Python version
+python3 --version
+
+# Ensure Python 3.6+
+which python3
+```
+
+## Exit Status
+
+ycqlsh returns 0 on success, non-zero on error.
+
+## See Also
+
+- [YCQL API](/api/ycql) - CQL reference for YugabyteDB
+- [yugabyted](/api/cli/yugabyted) - Cluster management tool
+- [ysqlsh](/api/cli/ysqlsh) - YSQL shell
+- [yb-admin](/api/cli/yb-admin) - Advanced administration

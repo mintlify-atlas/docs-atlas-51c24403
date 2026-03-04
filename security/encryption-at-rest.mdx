@@ -1,0 +1,393 @@
+---
+title: Encryption at Rest
+description: Protect data at rest using symmetric key encryption with YugabyteDB
+---
+
+Encryption at rest protects your data files from unauthorized access by encrypting data stored on disk. YugabyteDB implements encryption at rest using a two-tier key architecture with AES encryption in CTR mode.
+
+## Architecture Overview
+
+YugabyteDB uses a two-level encryption key hierarchy:
+
+1. **Universe Keys**: Top-level symmetric keys that encrypt data keys (managed by users)
+2. **Data Keys**: Per-file symmetric keys that encrypt actual data (managed automatically)
+
+This design allows for efficient key rotation without re-encrypting all data.
+
+### How It Works
+
+- Each SSTable and WAL file gets its own unique data key (16 bytes for AES-128)
+- Data keys are encrypted with the current universe key
+- Encrypted data keys are stored in file headers
+- The plaintext universe key is kept only in master memory (never persisted)
+- Masters distribute encrypted key registries to tablet servers via heartbeat
+
+### Encryption Algorithm
+
+YugabyteDB uses AES encryption in CTR (Counter) mode:
+
+- **Supported key sizes**: 128-bit (32 bytes), 192-bit (40 bytes), or 256-bit (48 bytes)
+- **Block size**: 16 bytes
+- **Advantages**: 1:1 plaintext to ciphertext mapping, efficient random reads, no padding required
+
+## Enable Encryption at Rest
+
+### Step 1: Generate Universe Key
+
+Create a universe key using OpenSSL:
+
+```bash
+# Generate 32-byte key (AES-128)
+openssl rand -out /path/to/universe_key 32
+
+# Generate 40-byte key (AES-192)
+openssl rand -out /path/to/universe_key 40
+
+# Generate 48-byte key (AES-256)
+openssl rand -out /path/to/universe_key 48
+```
+
+<Warning>
+  Store the universe key file in a secure location with restricted permissions. Loss of this key will make your data unrecoverable.
+</Warning>
+
+### Step 2: Copy Key to All Masters
+
+Distribute the key to all master nodes using yb-admin:
+
+```bash
+# Set master addresses
+export MASTER_ADDRESSES="ip1:7100,ip2:7100,ip3:7100"
+
+# Choose a unique key ID
+export KEY_ID="encryption_key_v1"
+
+# Add key to all masters' in-memory state
+yb-admin --master_addresses $MASTER_ADDRESSES \
+  add_universe_key_to_all_masters $KEY_ID /path/to/universe_key
+```
+
+### Step 3: Verify Key Distribution
+
+Ensure all masters have the key in memory:
+
+```bash
+yb-admin --master_addresses $MASTER_ADDRESSES \
+  all_masters_have_universe_key_in_memory $KEY_ID
+```
+
+Expected output:
+
+```
+All masters have universe key in memory: true
+```
+
+### Step 4: Enable Encryption
+
+Activate encryption cluster-wide:
+
+```bash
+yb-admin --master_addresses $MASTER_ADDRESSES \
+  rotate_universe_key_in_memory $KEY_ID
+```
+
+<Warning>
+  Only new data written after enabling encryption will be encrypted. Existing data remains unencrypted until compaction occurs. This is by design for efficiency.
+</Warning>
+
+### Step 5: Verify Encryption Status
+
+Check that encryption is enabled:
+
+```bash
+yb-admin --master_addresses $MASTER_ADDRESSES \
+  is_encryption_enabled
+```
+
+Expected output:
+
+```
+Encryption status: ENABLED with key id encryption_key_v1
+```
+
+## Key Rotation
+
+Regularly rotate encryption keys to limit exposure windows. YugabyteDB supports efficient key rotation without full data re-encryption.
+
+### Step 1: Generate New Key
+
+Create a new universe key:
+
+```bash
+# Generate new key with different filename
+openssl rand -out /path/to/universe_key_v2 48
+```
+
+### Step 2: Add New Key to Masters
+
+Distribute the new key to all masters:
+
+```bash
+export KEY_ID_2="encryption_key_v2"
+
+yb-admin --master_addresses $MASTER_ADDRESSES \
+  add_universe_key_to_all_masters $KEY_ID_2 /path/to/universe_key_v2
+```
+
+### Step 3: Rotate to New Key
+
+Switch to using the new key for new data:
+
+```bash
+# Verify key is distributed
+yb-admin --master_addresses $MASTER_ADDRESSES \
+  all_masters_have_universe_key_in_memory $KEY_ID_2
+
+# Activate new key
+yb-admin --master_addresses $MASTER_ADDRESSES \
+  rotate_universe_key_in_memory $KEY_ID_2
+```
+
+### Step 4: Verify New Key
+
+```bash
+yb-admin --master_addresses $MASTER_ADDRESSES \
+  is_encryption_enabled
+```
+
+Expected output:
+
+```
+Encryption status: ENABLED with key id encryption_key_v2
+```
+
+<Warning>
+  Keep old keys secure even after rotation. They are needed to read data encrypted with previous keys until compaction re-encrypts all data with the new key.
+</Warning>
+
+## Disable Encryption
+
+To disable encryption (not recommended for production):
+
+```bash
+yb-admin --master_addresses $MASTER_ADDRESSES \
+  disable_encryption
+```
+
+Verify encryption is disabled:
+
+```bash
+yb-admin --master_addresses $MASTER_ADDRESSES \
+  is_encryption_enabled
+```
+
+Expected output:
+
+```
+Encryption status: DISABLED
+```
+
+## Key Management Service (KMS) Integration
+
+YugabyteDB integrates with external KMS providers for enterprise key management.
+
+### Supported KMS Providers
+
+- **AWS KMS**: Amazon's Key Management Service
+- **Equinix SmartKey**: Cloud-based KMS platform
+- **HashiCorp Vault**: Open-source secrets management
+
+### AWS KMS Integration
+
+Configure YugabyteDB Anywhere to use AWS KMS:
+
+1. Create a KMS key in AWS:
+
+```bash
+aws kms create-key \
+  --description "YugabyteDB universe encryption key" \
+  --key-usage ENCRYPT_DECRYPT
+```
+
+2. Create an alias:
+
+```bash
+aws kms create-alias \
+  --alias-name alias/yugabyte-universe-1 \
+  --target-key-id <key-id>
+```
+
+3. Configure in YugabyteDB Anywhere UI or via API
+
+### Key Rotation with KMS
+
+With KMS integration, key rotation is managed through the KMS provider:
+
+```bash
+# AWS KMS automatic rotation
+aws kms enable-key-rotation --key-id <key-id>
+```
+
+## Encrypted File Format
+
+Each encrypted file has the following structure:
+
+```
++---------------------------+
+| Encryption Magic (8 bytes)|
++---------------------------+
+| Header Size (4 bytes)     |
++---------------------------+
+| Encryption Header PB      |
+|  - data_key (encrypted)   |
+|  - data_nonce             |
+|  - data_counter           |
+|  - universe_key_version   |
++---------------------------+
+| Encrypted Data            |
+| (using data_key)          |
++---------------------------+
+```
+
+Key points:
+- Universe key version is stored (not the key itself)
+- Each file's data key is encrypted with the universe key
+- Data is encrypted using AES-CTR with the data key
+
+## Backup and Restore
+
+Encrypted clusters require special consideration for backups.
+
+### Backing Up Encrypted Data
+
+Backups include encrypted data files:
+
+```bash
+# Create backup (data remains encrypted)
+yb-admin --master_addresses $MASTER_ADDRESSES \
+  create_snapshot <keyspace> <table>
+```
+
+### Restoring Encrypted Data
+
+To restore to a new cluster:
+
+1. **Restore universe key history**: Copy all universe keys (including rotated ones) to the new cluster
+
+```bash
+# Add all historical keys
+yb-admin --master_addresses $NEW_MASTER_ADDRESSES \
+  add_universe_key_to_all_masters $KEY_ID_1 /path/to/universe_key_v1
+
+yb-admin --master_addresses $NEW_MASTER_ADDRESSES \
+  add_universe_key_to_all_masters $KEY_ID_2 /path/to/universe_key_v2
+
+# Activate latest key
+yb-admin --master_addresses $NEW_MASTER_ADDRESSES \
+  rotate_universe_key_in_memory $KEY_ID_2
+```
+
+2. **Restore snapshot**:
+
+```bash
+yb-admin --master_addresses $NEW_MASTER_ADDRESSES \
+  restore_snapshot <snapshot_id> <keyspace> <table>
+```
+
+<Warning>
+  You must restore ALL universe keys that were used to encrypt the backed-up data. Missing keys will prevent data recovery.
+</Warning>
+
+## Master Node Failure Recovery
+
+When master nodes fail, they lose in-memory universe keys.
+
+### Single Master Failure
+
+On restart, the master requests the key from other masters:
+
+```bash
+# Masters automatically synchronize keys on startup
+# No manual intervention needed
+```
+
+### All Masters Down (Cold Start)
+
+If all masters restart simultaneously:
+
+1. **For YugabyteDB Anywhere deployments**: YBA automatically resupplies the key
+
+2. **For manual deployments**: Manually resupply the key:
+
+```bash
+# Re-add universe key to all masters
+yb-admin --master_addresses $MASTER_ADDRESSES \
+  add_universe_key_to_all_masters $KEY_ID /path/to/universe_key
+
+# Reactivate encryption
+yb-admin --master_addresses $MASTER_ADDRESSES \
+  rotate_universe_key_in_memory $KEY_ID
+```
+
+## Performance Considerations
+
+Encryption at rest has minimal performance impact:
+
+- **Write overhead**: ~3-5% due to encryption operations
+- **Read overhead**: ~2-4% for decryption
+- **AES-NI acceleration**: Modern CPUs with AES-NI instructions reduce overhead to less than 2%
+
+### Optimization Tips
+
+1. Use hardware with AES-NI support
+2. Choose AES-128 for better performance (32-byte keys)
+3. Use AES-256 for maximum security (48-byte keys)
+
+## Security Best Practices
+
+1. **Secure Key Storage**: Store universe keys in a hardware security module (HSM) or KMS
+2. **Access Control**: Restrict access to key files using file system permissions (chmod 400)
+3. **Regular Rotation**: Rotate universe keys every 90 days minimum
+4. **Key Backup**: Maintain secure offline backups of all universe keys
+5. **Audit Trail**: Enable audit logging for all encryption operations
+6. **Use KMS**: Integrate with a KMS provider for enterprise deployments
+7. **Combine with TLS**: Use encryption at rest with encryption in transit for defense in depth
+
+## Verify Encryption
+
+Check that data files are actually encrypted:
+
+```bash
+# List tablet data directories
+ls -la /mnt/disk0/yb-data/tserver/data/rocksdb/table-*/tablet-*/
+
+# Check file headers for encryption magic bytes
+xxd /mnt/disk0/yb-data/tserver/data/rocksdb/table-*/tablet-*/*.sst | head
+
+# Should show encryption header, not plaintext data
+```
+
+## Troubleshooting
+
+**Encryption fails to enable:**
+
+```bash
+# Check master logs
+tail -f /mnt/disk0/yb-data/master/logs/yb-master.INFO
+
+# Verify key is on all masters
+yb-admin --master_addresses $MASTER_ADDRESSES \
+  all_masters_have_universe_key_in_memory $KEY_ID
+```
+
+**Unable to read encrypted data after restore:**
+
+- Ensure all historical universe keys are added to the new cluster
+- Verify key IDs match the original cluster
+- Check master logs for key-related errors
+
+**Performance degradation:**
+
+- Verify CPU supports AES-NI: `grep aes /proc/cpuinfo`
+- Monitor encryption overhead: Check YB-TServer metrics
+- Consider using smaller key sizes (AES-128 vs AES-256)

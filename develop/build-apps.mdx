@@ -1,0 +1,292 @@
+---
+title: Build Applications
+description: Get started building applications with YugabyteDB
+icon: 'code'
+---
+
+Start building applications on top of YugabyteDB using your favorite programming language. YugabyteDB provides PostgreSQL-compatible YSQL and Cassandra-compatible YCQL APIs for seamless integration with your applications.
+
+## Quick Start
+
+Building applications with YugabyteDB is straightforward. Choose your preferred programming language and get started in minutes.
+
+### Prerequisites
+
+Before you begin:
+
+- **YugabyteDB cluster**: Set up a local cluster or create a free cluster on YugabyteDB Aeon
+- **Programming language**: Install your preferred language runtime (Java, Python, Node.js, etc.)
+- **Driver**: Install the appropriate database driver for your language
+
+## Choose Your Language
+
+YugabyteDB supports drivers and ORMs for all major programming languages:
+
+<CardGroup cols={3}>
+  <Card title="Java" icon="java" href="/develop/drivers-orms#java">
+    PostgreSQL JDBC driver and YugabyteDB Smart Driver
+  </Card>
+  <Card title="Python" icon="python" href="/develop/drivers-orms#python">
+    Psycopg2, Psycopg3, and SQLAlchemy support
+  </Card>
+  <Card title="Node.js" icon="node-js" href="/develop/drivers-orms#nodejs">
+    node-postgres driver with full async/await support
+  </Card>
+  <Card title="Go" icon="golang" href="/develop/drivers-orms#go">
+    pgx and GORM for efficient Go applications
+  </Card>
+  <Card title="C#" icon="microsoft" href="/develop/drivers-orms#csharp">
+    Npgsql driver and Entity Framework support
+  </Card>
+  <Card title="Ruby" icon="gem" href="/develop/drivers-orms#ruby">
+    pg gem and Active Record ORM
+  </Card>
+</CardGroup>
+
+## Basic Application Pattern
+
+Here's the typical workflow for building a YugabyteDB application:
+
+### 1. Connect to the Database
+
+Establish a connection using your driver with connection parameters.
+
+<CodeGroup>
+```java Java
+import java.sql.Connection;
+import java.sql.DriverManager;
+
+String jdbcUrl = "jdbc:postgresql://localhost:5433/yugabyte";
+Connection conn = DriverManager.getConnection(
+    jdbcUrl, 
+    "yugabyte", 
+    "yugabyte"
+);
+```
+
+```python Python
+import psycopg2
+
+conn = psycopg2.connect(
+    host="localhost",
+    port=5433,
+    database="yugabyte",
+    user="yugabyte",
+    password="yugabyte"
+)
+```
+
+```javascript Node.js
+const { Client } = require('pg');
+
+const client = new Client({
+  host: 'localhost',
+  port: 5433,
+  database: 'yugabyte',
+  user: 'yugabyte',
+  password: 'yugabyte'
+});
+
+await client.connect();
+```
+
+```go Go
+import (
+    "database/sql"
+    _ "github.com/lib/pq"
+)
+
+connStr := "host=localhost port=5433 user=yugabyte password=yugabyte dbname=yugabyte sslmode=disable"
+db, err := sql.Open("postgres", connStr)
+```
+</CodeGroup>
+
+### 2. Create Tables
+
+Define your schema using standard SQL DDL statements.
+
+```sql
+CREATE TABLE users (
+    id SERIAL PRIMARY KEY,
+    username TEXT NOT NULL,
+    email TEXT UNIQUE NOT NULL,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX idx_users_email ON users(email);
+```
+
+### 3. Insert Data
+
+Add records to your tables using INSERT statements.
+
+<CodeGroup>
+```java Java
+String insertSQL = "INSERT INTO users (username, email) VALUES (?, ?)";
+PreparedStatement pstmt = conn.prepareStatement(insertSQL);
+pstmt.setString(1, "john_doe");
+pstmt.setString(2, "john@example.com");
+pstmt.executeUpdate();
+```
+
+```python Python
+cursor = conn.cursor()
+cursor.execute(
+    "INSERT INTO users (username, email) VALUES (%s, %s)",
+    ("john_doe", "john@example.com")
+)
+conn.commit()
+```
+
+```javascript Node.js
+await client.query(
+  'INSERT INTO users (username, email) VALUES ($1, $2)',
+  ['john_doe', 'john@example.com']
+);
+```
+</CodeGroup>
+
+### 4. Query Data
+
+Retrieve data using SELECT statements.
+
+<CodeGroup>
+```java Java
+String querySQL = "SELECT * FROM users WHERE email = ?";
+PreparedStatement pstmt = conn.prepareStatement(querySQL);
+pstmt.setString(1, "john@example.com");
+ResultSet rs = pstmt.executeQuery();
+
+while (rs.next()) {
+    String username = rs.getString("username");
+    System.out.println("User: " + username);
+}
+```
+
+```python Python
+cursor.execute("SELECT * FROM users WHERE email = %s", ("john@example.com",))
+for row in cursor.fetchall():
+    print(f"User: {row[1]}")  # username is at index 1
+```
+
+```javascript Node.js
+const result = await client.query(
+  'SELECT * FROM users WHERE email = $1',
+  ['john@example.com']
+);
+
+result.rows.forEach(row => {
+  console.log(`User: ${row.username}`);
+});
+```
+</CodeGroup>
+
+### 5. Update and Delete
+
+Modify existing data as needed.
+
+```sql
+-- Update user information
+UPDATE users SET username = 'jane_doe' WHERE email = 'john@example.com';
+
+-- Delete a user
+DELETE FROM users WHERE email = 'john@example.com';
+```
+
+## Connection String Format
+
+YugabyteDB uses PostgreSQL-compatible connection strings for YSQL:
+
+```
+jdbc:postgresql://hostname:port/database?user=username&password=password
+postgresql://username:password@hostname:port/database
+```
+
+**Common Parameters:**
+- `hostname`: YugabyteDB server address (default: localhost)
+- `port`: YSQL port (default: 5433)
+- `database`: Database name (default: yugabyte)
+- `user`: Username (default: yugabyte)
+- `password`: User password (default: yugabyte)
+
+### SSL/TLS Connections
+
+For secure connections, especially in production:
+
+```
+postgresql://username:password@hostname:port/database?ssl=true&sslmode=verify-full&sslrootcert=/path/to/root.crt
+```
+
+## Application Best Practices
+
+<AccordionGroup>
+  <Accordion title="Use Connection Pooling">
+    Connection pooling reduces overhead and improves performance by reusing database connections.
+    
+    **Recommended poolers:**
+    - Java: HikariCP
+    - Python: SQLAlchemy pooling
+    - Node.js: pg-pool
+    - Built-in: YSQL Connection Manager
+  </Accordion>
+
+  <Accordion title="Handle Retries and Errors">
+    Implement retry logic for transient errors in distributed systems:
+    
+    - Connection timeouts
+    - Temporary network failures
+    - Transaction conflicts
+    
+    Use exponential backoff for retries.
+  </Accordion>
+
+  <Accordion title="Use Prepared Statements">
+    Prepared statements provide:
+    - Protection against SQL injection
+    - Better query performance
+    - Efficient parameterized queries
+  </Accordion>
+
+  <Accordion title="Optimize for Distributed Architecture">
+    - Use primary keys wisely for data distribution
+    - Leverage indexes for query performance
+    - Consider data locality for multi-region deployments
+  </Accordion>
+</AccordionGroup>
+
+## Sample Applications
+
+YugabyteDB provides sample applications in multiple languages:
+
+- **Java**: JDBC examples with YugabyteDB
+- **Python**: Flask and Django applications
+- **Node.js**: Express.js REST APIs
+- **Go**: Microservices with pgx
+
+<Card title="View Sample Apps" icon="github" href="https://github.com/yugabyte/yugabyte-db/tree/master/sample">
+  Explore complete sample applications on GitHub
+</Card>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Drivers & ORMs" icon="plug" href="/develop/drivers-orms">
+    Learn about supported drivers and ORMs
+  </Card>
+  <Card title="YSQL API" icon="database" href="/develop/ysql-api">
+    Explore the YSQL API reference
+  </Card>
+  <Card title="Best Practices" icon="star" href="/develop/best-practices">
+    Follow development best practices
+  </Card>
+  <Card title="Tutorials" icon="book" href="/tutorials">
+    Step-by-step application tutorials
+  </Card>
+</CardGroup>
+
+## Additional Resources
+
+- [Connection pooling strategies](/develop/best-practices#connection-pooling)
+- [Transaction handling](/develop/best-practices#transactions)
+- [Smart drivers for load balancing](/develop/drivers-orms#smart-drivers)
+- [Multi-region application patterns](/architecture/global-apps)

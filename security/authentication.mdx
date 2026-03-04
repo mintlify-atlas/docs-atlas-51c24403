@@ -1,0 +1,263 @@
+---
+title: Authentication
+description: Secure your YugabyteDB cluster with password-based and certificate-based authentication mechanisms
+---
+
+Authentication verifies the identity of users and applications before granting access to your YugabyteDB cluster. YugabyteDB supports multiple authentication methods through both YSQL (PostgreSQL-compatible) and YCQL (Cassandra-compatible) APIs.
+
+## Authentication Methods
+
+YugabyteDB supports the following authentication mechanisms:
+
+### Password Authentication
+
+Password authentication is the most common method for verifying user identity. YugabyteDB supports multiple password encryption schemes:
+
+**MD5 Authentication**
+
+MD5 is the default password encryption method, but it's not recommended for production environments:
+
+```bash
+# Enable MD5 authentication
+yb-tserver --ysql_hba_conf_csv='host all all 0.0.0.0/0 md5'
+```
+
+<Warning>
+  MD5 hashing is vulnerable to determined attacks. The password hash is effectively shared over the wire with each authentication, making it susceptible to sniffing and brute force attacks. Use SCRAM-SHA-256 for production systems.
+</Warning>
+
+**SCRAM-SHA-256 Authentication**
+
+SCRAM-SHA-256 is the recommended authentication method, providing strong cryptographic protection:
+
+```bash
+# Configure SCRAM-SHA-256 password encryption
+yb-tserver \
+  --ysql_pg_conf_csv="password_encryption=scram-sha-256" \
+  --ysql_hba_conf_csv='host all all 0.0.0.0/0 scram-sha-256'
+```
+
+After enabling SCRAM-SHA-256, create the pgaudit extension and set user passwords:
+
+```sql
+-- Create a user with SCRAM-SHA-256 encrypted password
+CREATE ROLE myuser WITH LOGIN PASSWORD 'secure_password';
+
+-- Change existing user password (will use SCRAM-SHA-256)
+ALTER ROLE existing_user PASSWORD 'new_secure_password';
+```
+
+### Certificate-Based Authentication
+
+Certificate authentication uses TLS client certificates to verify user identity:
+
+```bash
+# Enable certificate authentication
+yb-tserver \
+  --use_client_to_server_encryption=true \
+  --certs_for_client_dir=/path/to/certs \
+  --ysql_hba_conf_csv='hostssl all all all cert'
+```
+
+Connect using client certificates:
+
+```bash
+ysqlsh "sslmode=require \
+  sslcert=/path/to/client.crt \
+  sslkey=/path/to/client.key \
+  sslrootcert=/path/to/ca.crt"
+```
+
+### LDAP Authentication
+
+YugabyteDB can integrate with LDAP servers for centralized user management:
+
+```bash
+# Configure LDAP authentication
+yb-tserver --ysql_hba_conf_csv='host all all 0.0.0.0/0 ldap ldapserver=ldap.example.com ldapprefix="cn=" ldapsuffix=",ou=users,dc=example,dc=com"'
+```
+
+## Host-Based Authentication (HBA)
+
+Host-based authentication controls which hosts can connect using which authentication methods. Configure HBA rules using the `--ysql_hba_conf_csv` flag:
+
+```bash
+# Allow local connections with trust, require SCRAM for remote
+yb-tserver --ysql_hba_conf_csv='
+  local all yugabyte trust,
+  host all yugabyte 127.0.0.1/32 trust,
+  host all all 0.0.0.0/0 scram-sha-256
+'
+```
+
+### HBA Record Format
+
+Each HBA record follows this format:
+
+```
+connection_type database user address auth_method [auth_options]
+```
+
+- **connection_type**: `local`, `host`, `hostssl`, or `hostnossl`
+- **database**: Database name or `all`
+- **user**: Username or `all`
+- **address**: IP address/CIDR or `0.0.0.0/0` for all
+- **auth_method**: `trust`, `md5`, `scram-sha-256`, `cert`, `ldap`, etc.
+
+### Example HBA Configurations
+
+**Secure multi-tier access:**
+
+```bash
+yb-tserver --ysql_hba_conf_csv='
+  hostssl all postgres 10.0.1.0/24 cert,
+  hostssl all app_users 10.0.2.0/24 scram-sha-256,
+  hostssl all all 0.0.0.0/0 reject
+'
+```
+
+**Development environment:**
+
+```bash
+yb-tserver --ysql_hba_conf_csv='
+  host all all 127.0.0.1/32 trust,
+  host all all ::1/128 trust
+'
+```
+
+<Warning>
+  Never use `trust` authentication in production environments. It allows connections without any password verification.
+</Warning>
+
+## Enable Authentication
+
+Authentication is disabled by default. Enable it using the `--ysql_enable_auth` flag:
+
+### Using yugabyted
+
+```bash
+# Start with authentication enabled
+yugabyted start --ysql_enable_auth=true
+
+# Or use --secure flag for full security (auth + TLS)
+yugabyted start --secure
+```
+
+### Manual Deployment
+
+```bash
+# Start YB-TServer with authentication
+yb-tserver \
+  --tserver_master_addrs=<master_addresses> \
+  --fs_data_dirs=<data_dirs> \
+  --ysql_enable_auth=true \
+  --ysql_pg_conf_csv="password_encryption=scram-sha-256" \
+  --ysql_hba_conf_csv='host all all 0.0.0.0/0 scram-sha-256'
+```
+
+## Default Credentials
+
+When authentication is enabled:
+
+- **Username**: `yugabyte`
+- **Default Password**: `yugabyte` (or from credentials file with `--secure`)
+- **Default Database**: `yugabyte`
+
+<Warning>
+  Always change the default password immediately after enabling authentication:
+  
+  ```sql
+  ALTER ROLE yugabyte WITH PASSWORD 'strong_new_password';
+  ```
+</Warning>
+
+## User Management
+
+Create and manage users with appropriate authentication settings:
+
+```sql
+-- Create a regular user
+CREATE ROLE app_user WITH LOGIN PASSWORD 'secure_password';
+
+-- Create a superuser
+CREATE ROLE admin_user WITH LOGIN SUPERUSER PASSWORD 'admin_password';
+
+-- Grant connection privileges
+GRANT CONNECT ON DATABASE production TO app_user;
+
+-- Revoke login privileges
+ALTER ROLE app_user WITH NOLOGIN;
+
+-- Delete a user
+DROP ROLE app_user;
+```
+
+## Verify Authentication Configuration
+
+Check your authentication settings:
+
+```sql
+-- View HBA configuration file location
+SHOW hba_file;
+
+-- View all HBA rules and their status
+SELECT * FROM pg_hba_file_rules;
+
+-- List all roles and their authentication attributes
+SELECT rolname, rolsuper, rolcanlogin FROM pg_roles;
+
+-- Check password encryption setting
+SHOW password_encryption;
+```
+
+## Authentication Best Practices
+
+1. **Use SCRAM-SHA-256**: Always prefer SCRAM-SHA-256 over MD5 for password authentication
+2. **Combine with TLS**: Use authentication with encryption in transit for complete security
+3. **Restrict by IP**: Use specific IP ranges in HBA rules rather than `0.0.0.0/0`
+4. **Regular Password Rotation**: Implement a password rotation policy for all users
+5. **Limit Superusers**: Minimize the number of users with SUPERUSER privileges
+6. **Use Certificate Auth**: For automated systems, use certificate-based authentication
+7. **Monitor Failed Attempts**: Enable audit logging to track authentication failures
+
+## Reset Lost Password
+
+If you lose the admin password:
+
+1. Temporarily allow passwordless access:
+
+```bash
+yb-tserver --ysql_hba_conf_csv='host all yugabyte 0.0.0.0/0 trust'
+```
+
+2. Connect and reset the password:
+
+```sql
+ALTER ROLE yugabyte WITH PASSWORD 'new_password';
+```
+
+3. Restore secure HBA configuration and restart:
+
+```bash
+yb-tserver --ysql_hba_conf_csv='host all all 0.0.0.0/0 scram-sha-256'
+```
+
+## Troubleshooting
+
+**Authentication fails after enabling:**
+
+- Verify HBA rules are correct: `SELECT * FROM pg_hba_file_rules;`
+- Check for error messages in YB-TServer logs
+- Ensure password encryption matches authentication method
+
+**Cannot connect remotely:**
+
+- Verify `--ysql_hba_conf_csv` includes rules for remote hosts
+- Check firewall rules allow connections to port 5433
+- Confirm `--rpc_bind_addresses` includes the correct interface
+
+**Certificate authentication fails:**
+
+- Verify certificates are signed by the same CA
+- Check certificate file permissions (should be readable)
+- Ensure client certificate CN matches the database username

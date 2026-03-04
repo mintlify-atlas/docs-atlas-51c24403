@@ -1,0 +1,519 @@
+---
+title: C++ Client Driver
+description: Connect to YugabyteDB using C++ with libpqxx and libpq drivers
+---
+
+C++ applications can connect to YugabyteDB using libpqxx (C++ API) or libpq (C API). Both drivers are fully compatible with YugabyteDB's PostgreSQL-compatible YSQL API.
+
+## Installation
+
+### libpqxx
+
+libpqxx is the official C++ client library for PostgreSQL, built on top of libpq.
+
+<CodeGroup>
+
+```bash Ubuntu/Debian
+sudo apt-get install libpqxx-dev
+```
+
+```bash macOS (Homebrew)
+brew install libpqxx
+```
+
+```bash From Source
+git clone https://github.com/jtv/libpqxx.git
+cd libpqxx
+./configure
+make
+sudo make install
+```
+
+</CodeGroup>
+
+### libpq
+
+libpq is included with YugabyteDB or can be installed separately.
+
+<CodeGroup>
+
+```bash Ubuntu/Debian
+sudo apt-get install libpq-dev
+```
+
+```bash macOS (Homebrew)
+brew install libpq
+```
+
+```bash YugabyteDB Installation
+export LD_LIBRARY_PATH=<yugabyte-install-dir>/postgres/lib
+```
+
+</CodeGroup>
+
+## Quick Start
+
+### Using libpqxx
+
+```cpp
+#include <iostream>
+#include <pqxx/pqxx>
+
+int main() {
+    try {
+        // Connect to database
+        pqxx::connection conn(
+            "host=localhost port=5433 dbname=yugabyte "
+            "user=yugabyte password=yugabyte"
+        );
+        
+        std::cout << "Connected to " << conn.dbname() << std::endl;
+        
+        // Create a work (transaction) object
+        pqxx::work txn(conn);
+        
+        // Execute query
+        pqxx::result res = txn.exec("SELECT version()");
+        
+        // Process results
+        for (auto row : res) {
+            std::cout << "Database version: " << row[0].c_str() << std::endl;
+        }
+        
+        // Commit transaction
+        txn.commit();
+        
+    } catch (const std::exception &e) {
+        std::cerr << "Error: " << e.what() << std::endl;
+        return 1;
+    }
+    
+    return 0;
+}
+```
+
+### Using libpq
+
+```cpp
+#include <iostream>
+#include <libpq-fe.h>
+
+void printResult(PGresult *res) {
+    int rows = PQntuples(res);
+    int cols = PQnfields(res);
+    
+    for (int i = 0; i < rows; i++) {
+        for (int j = 0; j < cols; j++) {
+            std::cout << PQgetvalue(res, i, j) << " ";
+        }
+        std::cout << std::endl;
+    }
+}
+
+int main() {
+    // Connect to database
+    PGconn *conn = PQconnectdb(
+        "host=localhost port=5433 dbname=yugabyte "
+        "user=yugabyte password=yugabyte"
+    );
+    
+    if (PQstatus(conn) != CONNECTION_OK) {
+        std::cerr << "Connection failed: " << PQerrorMessage(conn) << std::endl;
+        PQfinish(conn);
+        return 1;
+    }
+    
+    std::cout << "Connected successfully" << std::endl;
+    
+    // Execute query
+    PGresult *res = PQexec(conn, "SELECT version()");
+    
+    if (PQresultStatus(res) != PGRES_TUPLES_OK) {
+        std::cerr << "Query failed: " << PQerrorMessage(conn) << std::endl;
+        PQclear(res);
+        PQfinish(conn);
+        return 1;
+    }
+    
+    // Print results
+    printResult(res);
+    
+    // Cleanup
+    PQclear(res);
+    PQfinish(conn);
+    
+    return 0;
+}
+```
+
+## Connection Configuration
+
+### libpqxx Connection Options
+
+<CodeGroup>
+
+```cpp Connection String
+pqxx::connection conn(
+    "host=localhost port=5433 dbname=yugabyte "
+    "user=yugabyte password=yugabyte"
+);
+```
+
+```cpp Connection URI
+pqxx::connection conn(
+    "postgresql://yugabyte:yugabyte@localhost:5433/yugabyte"
+);
+```
+
+```cpp Multiple Hosts
+pqxx::connection conn(
+    "host=node1,node2,node3 port=5433 dbname=yugabyte "
+    "user=yugabyte password=yugabyte target_session_attrs=any"
+);
+```
+
+</CodeGroup>
+
+### SSL/TLS Configuration
+
+```cpp
+// libpqxx with SSL
+pqxx::connection conn(
+    "host=your-cluster.yugabyte.cloud port=5433 "
+    "dbname=yugabyte user=admin password=yourpassword "
+    "sslmode=verify-full sslrootcert=/path/to/root.crt"
+);
+
+// libpq with SSL
+const char *conninfo = 
+    "host=your-cluster.yugabyte.cloud port=5433 "
+    "dbname=yugabyte user=admin password=yourpassword "
+    "sslmode=verify-full sslrootcert=/path/to/root.crt";
+    
+PGconn *conn = PQconnectdb(conninfo);
+```
+
+#### SSL Modes
+
+| Mode | Description |
+|------|-------------|
+| `disable` | No SSL |
+| `allow` | Try SSL, fallback to non-SSL |
+| `prefer` | Prefer SSL (default) |
+| `require` | Require SSL without verification |
+| `verify-ca` | Require SSL and verify CA |
+| `verify-full` | Require SSL and verify CA and hostname |
+
+## CRUD Operations
+
+### Create (Insert)
+
+```cpp
+#include <pqxx/pqxx>
+
+void insertUser(pqxx::connection &conn, 
+                const std::string &name, 
+                const std::string &email, 
+                int age) {
+    pqxx::work txn(conn);
+    
+    // Parameterized insert
+    pqxx::result res = txn.exec_params(
+        "INSERT INTO users (name, email, age) VALUES ($1, $2, $3) RETURNING id",
+        name, email, age
+    );
+    
+    int userId = res[0][0].as<int>();
+    std::cout << "Created user with ID: " << userId << std::endl;
+    
+    txn.commit();
+}
+
+// Bulk insert
+void bulkInsert(pqxx::connection &conn) {
+    pqxx::work txn(conn);
+    
+    for (int i = 0; i < 100; i++) {
+        txn.exec_params(
+            "INSERT INTO users (name, email, age) VALUES ($1, $2, $3)",
+            "User" + std::to_string(i),
+            "user" + std::to_string(i) + "@example.com",
+            20 + i
+        );
+    }
+    
+    txn.commit();
+}
+```
+
+### Read (Select)
+
+```cpp
+struct User {
+    int id;
+    std::string name;
+    std::string email;
+    int age;
+};
+
+// Query single row
+User getUser(pqxx::connection &conn, int userId) {
+    pqxx::nontransaction txn(conn);
+    
+    pqxx::result res = txn.exec_params(
+        "SELECT id, name, email, age FROM users WHERE id = $1",
+        userId
+    );
+    
+    if (res.empty()) {
+        throw std::runtime_error("User not found");
+    }
+    
+    User user;
+    user.id = res[0][0].as<int>();
+    user.name = res[0][1].as<std::string>();
+    user.email = res[0][2].as<std::string>();
+    user.age = res[0][3].as<int>();
+    
+    return user;
+}
+
+// Query multiple rows
+std::vector<User> getAllUsers(pqxx::connection &conn) {
+    pqxx::nontransaction txn(conn);
+    
+    pqxx::result res = txn.exec(
+        "SELECT id, name, email, age FROM users ORDER BY id"
+    );
+    
+    std::vector<User> users;
+    for (auto row : res) {
+        User user;
+        user.id = row[0].as<int>();
+        user.name = row[1].as<std::string>();
+        user.email = row[2].as<std::string>();
+        user.age = row[3].as<int>();
+        users.push_back(user);
+    }
+    
+    return users;
+}
+```
+
+### Update
+
+```cpp
+void updateUser(pqxx::connection &conn, int userId, int newAge) {
+    pqxx::work txn(conn);
+    
+    pqxx::result res = txn.exec_params(
+        "UPDATE users SET age = $1 WHERE id = $2",
+        newAge, userId
+    );
+    
+    std::cout << "Updated " << res.affected_rows() << " row(s)" << std::endl;
+    
+    txn.commit();
+}
+```
+
+### Delete
+
+```cpp
+void deleteUser(pqxx::connection &conn, int userId) {
+    pqxx::work txn(conn);
+    
+    pqxx::result res = txn.exec_params(
+        "DELETE FROM users WHERE id = $1",
+        userId
+    );
+    
+    std::cout << "Deleted " << res.affected_rows() << " row(s)" << std::endl;
+    
+    txn.commit();
+}
+```
+
+## Transaction Management
+
+### Basic Transactions
+
+```cpp
+void transferMoney(pqxx::connection &conn, int fromId, int toId, double amount) {
+    pqxx::work txn(conn);
+    
+    try {
+        // Debit from source account
+        txn.exec_params(
+            "UPDATE accounts SET balance = balance - $1 WHERE id = $2",
+            amount, fromId
+        );
+        
+        // Credit to destination account
+        txn.exec_params(
+            "UPDATE accounts SET balance = balance + $1 WHERE id = $2",
+            amount, toId
+        );
+        
+        // Commit transaction
+        txn.commit();
+        std::cout << "Transfer successful" << std::endl;
+        
+    } catch (const std::exception &e) {
+        // Transaction automatically rolls back
+        std::cerr << "Transfer failed: " << e.what() << std::endl;
+        throw;
+    }
+}
+```
+
+### Transaction Isolation Levels
+
+```cpp
+// Read Committed (default)
+pqxx::work txn(conn);
+
+// Serializable
+pqxx::work txn(conn, "serializable_txn");
+txn.exec("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE");
+
+// Repeatable Read
+pqxx::work txn(conn, "repeatable_read_txn");
+txn.exec("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ");
+```
+
+## Prepared Statements
+
+```cpp
+void usePreparedStatements(pqxx::connection &conn) {
+    // Prepare statement
+    conn.prepare(
+        "get_user",
+        "SELECT id, name, email FROM users WHERE id = $1"
+    );
+    
+    conn.prepare(
+        "insert_user",
+        "INSERT INTO users (name, email, age) VALUES ($1, $2, $3) RETURNING id"
+    );
+    
+    // Use prepared statements
+    pqxx::work txn(conn);
+    
+    pqxx::result res1 = txn.exec_prepared("get_user", 1);
+    std::cout << "User name: " << res1[0][1].c_str() << std::endl;
+    
+    pqxx::result res2 = txn.exec_prepared(
+        "insert_user",
+        "Alice", "alice@example.com", 25
+    );
+    std::cout << "Inserted user ID: " << res2[0][0].as<int>() << std::endl;
+    
+    txn.commit();
+}
+```
+
+## Best Practices
+
+### Connection Management
+
+```cpp
+class DatabaseConnection {
+private:
+    std::unique_ptr<pqxx::connection> conn;
+    
+public:
+    DatabaseConnection(const std::string &connStr) {
+        conn = std::make_unique<pqxx::connection>(connStr);
+    }
+    
+    pqxx::connection& getConnection() {
+        if (!conn->is_open()) {
+            throw std::runtime_error("Database connection is closed");
+        }
+        return *conn;
+    }
+    
+    ~DatabaseConnection() {
+        if (conn && conn->is_open()) {
+            conn->close();
+        }
+    }
+};
+```
+
+### Error Handling
+
+```cpp
+#include <pqxx/pqxx>
+
+void safeQuery(pqxx::connection &conn) {
+    try {
+        pqxx::work txn(conn);
+        pqxx::result res = txn.exec("SELECT * FROM users");
+        txn.commit();
+        
+    } catch (const pqxx::sql_error &e) {
+        std::cerr << "SQL error: " << e.what() << std::endl;
+        std::cerr << "Query: " << e.query() << std::endl;
+        
+    } catch (const pqxx::broken_connection &e) {
+        std::cerr << "Connection error: " << e.what() << std::endl;
+        
+    } catch (const std::exception &e) {
+        std::cerr << "Error: " << e.what() << std::endl;
+    }
+}
+```
+
+### Parameterized Queries
+
+Always use parameterized queries to prevent SQL injection:
+
+```cpp
+// ✅ Good - Parameterized query
+pqxx::result res = txn.exec_params(
+    "SELECT * FROM users WHERE email = $1",
+    userEmail
+);
+
+// ❌ Bad - String concatenation (vulnerable to SQL injection)
+std::string query = "SELECT * FROM users WHERE email = '" + userEmail + "'";
+pqxx::result res = txn.exec(query);
+```
+
+## Compiling Your Application
+
+### Using g++
+
+```bash
+# Compile with libpqxx
+g++ -o myapp myapp.cpp -lpqxx -lpq -std=c++17
+
+# Compile with libpq
+g++ -o myapp myapp.cpp -lpq -I/usr/include/postgresql
+```
+
+### CMakeLists.txt
+
+```cmake
+cmake_minimum_required(VERSION 3.10)
+project(YBApp)
+
+set(CMAKE_CXX_STANDARD 17)
+
+find_package(PostgreSQL REQUIRED)
+find_library(PQXX_LIB pqxx)
+find_path(PQXX_INCLUDE pqxx)
+
+include_directories(${PostgreSQL_INCLUDE_DIRS} ${PQXX_INCLUDE})
+
+add_executable(myapp main.cpp)
+target_link_libraries(myapp ${PQXX_LIB} ${PostgreSQL_LIBRARIES})
+```
+
+## Additional Resources
+
+- [libpqxx Documentation](https://libpqxx.readthedocs.io/)
+- [libpq Documentation](https://www.postgresql.org/docs/current/libpq.html)
+- [C++ Drivers Overview](/drivers-orms/cpp/)

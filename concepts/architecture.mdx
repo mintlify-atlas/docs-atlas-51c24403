@@ -1,0 +1,189 @@
+---
+title: Architecture Overview
+description: Understanding YugabyteDB's distributed architecture and layered design
+---
+
+YugabyteDB is a distributed SQL database that combines the principles of distributed systems with familiar relational database concepts. It's designed to manage and process data across multiple nodes, ensuring high availability, scalability, and fault tolerance.
+
+## Layered Architecture
+
+YugabyteDB's architecture is logically split into two main layers:
+
+<CardGroup cols={2}>
+  <Card title="Query Layer" icon="database">
+    Handles user requests via YSQL and YCQL APIs, routing operations to the appropriate tablets
+  </Card>
+  <Card title="Storage Layer" icon="hard-drive">
+    Manages data persistence, replication, and consistency using DocDB
+  </Card>
+</CardGroup>
+
+### Query Layer (YQL)
+
+The YugabyteDB Query Layer (YQL) provides interfaces for applications to interact with the database using client drivers. This layer is stateless, meaning clients can connect to any YB-TServer node to perform operations.
+
+**Supported APIs:**
+
+- **YSQL** - A distributed SQL API that reuses the PostgreSQL query layer, providing wire-format compatibility with PostgreSQL (default port: 5433)
+- **YCQL** - A semi-relational API with roots in Cassandra Query Language, designed for internet-scale OLTP workloads (default port: 9042)
+
+**Query Processing Pipeline:**
+
+<Steps>
+  <Step title="Parser">
+    Validates SQL syntax and builds a parse tree representing the query structure
+  </Step>
+  <Step title="Analyzer">
+    Analyzes and rewrites the query tree based on system catalog rules
+  </Step>
+  <Step title="Planner">
+    Determines the optimal execution plan considering distributed data and available indexes
+  </Step>
+  <Step title="Executor">
+    Executes the plan by coordinating with YB-TServers that hold the required data
+  </Step>
+</Steps>
+
+### Storage Layer (DocDB)
+
+DocDB is YugabyteDB's distributed document storage engine, built on a highly customized version of RocksDB. It provides:
+
+- **Persistent storage** optimized for SSDs and NVMe drives
+- **Multi-version concurrency control (MVCC)** for transaction isolation
+- **Hybrid logical clocks** for distributed timestamp assignment
+- **Raft consensus** for data replication and consistency
+
+## Core Components
+
+### YB-Master
+
+The Master service acts as the catalog manager and cluster orchestrator:
+
+- Maintains system metadata (tables, tablets, schemas)
+- Coordinates DDL operations (CREATE, ALTER, DROP)
+- Manages cluster-wide operations like load balancing
+- Tracks tablet locations and health
+
+<Note>
+YB-Master nodes form their own Raft group for high availability. Typically, you deploy 3 Master nodes in production.
+</Note>
+
+### YB-TServer
+
+The Tablet Server (TServer) is responsible for data storage and query execution:
+
+- Hosts tablet replicas (shards of table data)
+- Executes queries and returns results
+- Participates in Raft consensus for replication
+- Handles read and write operations
+
+<Info>
+Each tablet is replicated across multiple TServers according to the replication factor (typically 3 for production).
+</Info>
+
+## Data Distribution
+
+### Sharding
+
+YugabyteDB automatically splits table data into smaller pieces called **tablets** and distributes them across nodes:
+
+```sql
+-- Hash sharding (default for YSQL)
+CREATE TABLE customers (
+    customer_id UUID PRIMARY KEY,
+    name TEXT,
+    email TEXT
+);
+
+-- Range sharding
+CREATE TABLE orders (
+    order_id INT,
+    order_date DATE,
+    PRIMARY KEY (order_id ASC)
+);
+```
+
+**Hash Sharding:**
+- Evenly distributes data using consistent hashing
+- Hash space: 16-bit range (0x0000 to 0xFFFF)
+- Ideal for massively scalable workloads
+- Maximum 64K tablets per table
+
+**Range Sharding:**
+- Maintains sort order of primary key
+- Efficient for range queries
+- Supports automatic tablet splitting
+
+### Tablet Splitting
+
+When a tablet reaches a threshold size, it automatically splits into two new tablets. This is a fast, online operation that doesn't require downtime.
+
+## Design Principles
+
+<AccordionGroup>
+  <Accordion title="Horizontal Scalability">
+    Scale out by adding nodes to handle increasing data volumes and workloads. YugabyteDB automatically rebalances tablets across nodes.
+  </Accordion>
+  
+  <Accordion title="High Availability">
+    Continuous availability through data replication and automatic failover via leader election. No single point of failure.
+  </Accordion>
+  
+  <Accordion title="Fault Tolerance">
+    Resilient to node crashes, network partitions, and hardware failures. Automatically recovers without data loss.
+  </Accordion>
+  
+  <Accordion title="Strong Consistency">
+    Supports distributed ACID transactions with multiple isolation levels (Serializable, Snapshot, Read Committed).
+  </Accordion>
+  
+  <Accordion title="Cloud Native">
+    Designed to run on commodity hardware across public clouds, on-premises, or hybrid environments.
+  </Accordion>
+</AccordionGroup>
+
+## CAP Theorem Classification
+
+YugabyteDB is a **CP (Consistent and Partition-tolerant)** database that also achieves very high availability:
+
+- **Consistency**: Raft consensus ensures strong consistency across replicas
+- **Partition Tolerance**: Continues operating during network partitions by electing new leaders
+- **High Availability**: Leader leases and quick failover (typically ~2-3 seconds) minimize downtime
+
+<Warning>
+YugabyteDB implements leader leases (default: 2 seconds) to prevent split-brain scenarios during network partitions. Only one tablet leader exists for each tablet at any time.
+</Warning>
+
+## Architecture Advantages
+
+<CardGroup cols={2}>
+  <Card title="PostgreSQL Compatibility" icon="elephant">
+    YSQL reuses PostgreSQL's query layer for native compatibility
+  </Card>
+  <Card title="No External Dependencies" icon="circle-check">
+    Works without atomic clocks or external coordination services
+  </Card>
+  <Card title="Geo-Distribution" icon="globe">
+    Built-in support for multi-region deployments with data locality
+  </Card>
+  <Card title="Open Source" icon="code-branch">
+    100% open source under Apache 2.0 license
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Data Model" icon="table" href="/concepts/data-model">
+    Learn how DocDB stores and encodes table data
+  </Card>
+  <Card title="Replication" icon="copy" href="/concepts/replication">
+    Understand how data is replicated using Raft
+  </Card>
+  <Card title="Transactions" icon="arrows-rotate" href="/concepts/distributed-transactions">
+    Explore distributed ACID transactions
+  </Card>
+  <Card title="Consistency Model" icon="check-double" href="/concepts/consistency-model">
+    Deep dive into consistency guarantees
+  </Card>
+</CardGroup>

@@ -1,0 +1,327 @@
+---
+title: Data Model
+description: How DocDB stores and encodes table rows as key-value pairs
+---
+
+DocDB is YugabyteDB's document-oriented storage engine that uses a key-value model for persisting and retrieving data. Each table row is represented as a document in DocDB, with data stored as values associated with unique keys.
+
+## Key-Value Storage Model
+
+DocDB stores table data by encoding rows into multiple key-value pairs. This approach enables:
+
+- **Efficient updates**: Modify individual columns without rewriting entire rows
+- **MVCC support**: Multiple versions of values with hybrid timestamps
+- **Flexible schema**: Support for nested documents and collections
+- **Optimized access**: Binary-comparable encodings for fast lookups
+
+<Note>
+As of v2.20, DocDB uses an optimized packed row format for better performance. The encoding described here represents the logical model.
+</Note>
+
+## DocDB Key Structure
+
+Keys in DocDB are compound keys with the following components:
+
+```
+[ColocationId], [HashCode], DocKey, [SubKey1], ..., [SubKeyN], HybridTimestamp
+```
+
+<AccordionGroup>
+  <Accordion title="Colocation ID (Optional)">
+    Present when using colocated tables/databases to separate data from different tables in the same tablet.
+  </Accordion>
+  
+  <Accordion title="Hash Code (Optional)">
+    A 16-bit hash of hash column values for hash-sharded tables. Determines which tablet owns the data.
+  </Accordion>
+  
+  <Accordion title="Document Key (DocKey)">
+    The primary key columns encoded in order: hash columns followed by range columns.
+  </Accordion>
+  
+  <Accordion title="Sub Keys (Optional)">
+    Column IDs for non-primary key columns. Enables partial updates without reading full rows.
+  </Accordion>
+  
+  <Accordion title="Hybrid Timestamp">
+    MVCC timestamp in reverse order for efficient retrieval of latest versions.
+  </Accordion>
+</AccordionGroup>
+
+## DocDB Value Types
+
+Values in DocDB can be:
+
+- **Primitive types**: int32, int64, double, text, timestamp, UUID, etc.
+- **Non-primitive types**: Sorted maps where objects map scalar keys to values
+- **Collections**: Lists and sets implemented using DocDB's object type
+
+## Encoding Example
+
+Consider this YSQL table:
+
+```sql
+CREATE TABLE msgs (
+    user_id text,
+    msg_id int,
+    msg text,
+    msg_props jsonb,
+    PRIMARY KEY ((user_id), msg_id)
+);
+```
+
+### Insert Operation
+
+```sql
+INSERT INTO msgs (user_id, msg_id, msg, msg_props)
+VALUES ('user1', 10, 'Hello', '{"from": "a@b.com", "subject": "hi"}');
+```
+
+DocDB storage at time T1:
+
+```
+(hash1, 'user1', 10), liveness_column_id, T1 -> [NULL]
+(hash1, 'user1', 10), msg_column_id, T1 -> 'Hello'
+(hash1, 'user1', 10), msg_props_column_id, 'from', T1 -> 'a@b.com'
+(hash1, 'user1', 10), msg_props_column_id, 'subject', T1 -> 'hi'
+```
+
+<Info>
+The liveness column is a special system column that tracks row-level metadata. It's invisible to users but essential for proper MVCC behavior.
+</Info>
+
+### Update Operation
+
+Updating a nested field:
+
+```sql
+UPDATE msgs
+SET msg_props = msg_props || '{"read": true}'
+WHERE user_id = 'user1' AND msg_id = 10;
+```
+
+DocDB storage at time T2 (only new entry added):
+
+```
+(hash1, 'user1', 10), liveness_column_id, T1 -> [NULL]
+(hash1, 'user1', 10), msg_column_id, T1 -> 'Hello'
+(hash1, 'user1', 10), msg_props_column_id, 'from', T1 -> 'a@b.com'
+(hash1, 'user1', 10), msg_props_column_id, 'read', T2 -> true  ← New
+(hash1, 'user1', 10), msg_props_column_id, 'subject', T1 -> 'hi'
+```
+
+### Delete Operation
+
+Deleting a column adds a tombstone marker:
+
+```sql
+DELETE FROM msgs WHERE user_id = 'user1' AND msg_id = 10;
+```
+
+DocDB storage at time T3:
+
+```
+(hash1, 'user1', 10), T3 -> [DELETE]  ← Tombstone marker
+```
+
+<Warning>
+Tombstones logically delete data but physically remain until compaction. Excessive deletes without compaction can impact performance.
+</Warning>
+
+## Primary Key Encoding
+
+The document key contains the full primary key with components in this order:
+
+<Steps>
+  <Step title="Hash Value">
+    16-bit hash of hash column values (if hash columns present)
+  </Step>
+  <Step title="Hash Columns">
+    All columns in the hash partition key, encoded with type prefixes
+  </Step>
+  <Step title="Range Columns">
+    Clustering/range columns in defined order (ASC or DESC)
+  </Step>
+</Steps>
+
+```sql
+-- Hash columns: (user_id)
+-- Range columns: msg_id
+PRIMARY KEY ((user_id), msg_id)
+
+-- Encoded as:
+-- [hash(user_id)], user_id, msg_id
+```
+
+<Info>
+If no primary key is defined, YugabyteDB automatically generates an internal row ID (similar to PostgreSQL's ctid).
+</Info>
+
+## Binary-Comparable Encoding
+
+All key components use binary-comparable encoding, ensuring:
+
+- **Sort order preservation**: Encoded byte strings sort the same as original values
+- **Type safety**: Each data type has a unique byte prefix
+- **Efficient comparisons**: Direct byte-level comparisons without decoding
+
+Example type prefixes:
+
+| Type | Prefix Byte |
+|------|-------------|
+| NULL | 0x00 |
+| Int32 | 0x03 |
+| String | 0x05 |
+| Int64 | 0x07 |
+| Timestamp | 0x0B |
+
+## Multi-Version Concurrency Control (MVCC)
+
+DocDB maintains multiple versions of each key using hybrid timestamps:
+
+```
+(key), T1 -> value1
+(key), T2 -> value2  ← Newer version
+(key), T3 -> value3  ← Latest version
+```
+
+Benefits:
+
+<CardGroup cols={2}>
+  <Card title="Lock-Free Reads" icon="book-open">
+    Readers never block writers, and writers never block readers
+  </Card>
+  <Card title="Point-in-Time Queries" icon="clock">
+    Read data as of any past hybrid timestamp
+  </Card>
+  <Card title="Snapshot Isolation" icon="camera">
+    Transactions see a consistent snapshot of data
+  </Card>
+  <Card title="Garbage Collection" icon="trash">
+    Old versions cleaned up after no active transactions need them
+  </Card>
+</CardGroup>
+
+## Packed Rows Optimization
+
+Since v2.20, DocDB uses packed row format for better performance:
+
+- **Reduced key count**: Multiple columns packed into single key-value pairs
+- **Lower overhead**: Fewer RocksDB operations per row
+- **Faster scans**: Sequential reads benefit from reduced key lookups
+- **Backward compatible**: Seamlessly handles both formats
+
+<Tip>
+Packed rows are automatically used for new tables. Existing tables can be migrated using pg_repack or similar tools.
+</Tip>
+
+## Data Expiration (YCQL Only)
+
+YCQL supports Time-To-Live (TTL) at multiple levels:
+
+**Table-level TTL:**
+
+```sql
+CREATE TABLE sessions (
+    session_id UUID PRIMARY KEY,
+    data TEXT
+) WITH default_time_to_live = 86400;  -- 24 hours
+```
+
+**Row-level TTL:**
+
+```sql
+INSERT INTO sessions (session_id, data)
+VALUES (uuid(), 'session_data')
+USING TTL 3600;  -- 1 hour
+```
+
+<Note>
+TTL is enforced during reads and compactions. Expired data is not immediately deleted but becomes invisible to queries.
+</Note>
+
+## Storage Characteristics
+
+### Log-Structured Merge (LSM) Tree
+
+DocDB uses RocksDB's LSM tree architecture:
+
+1. **MemTable**: In-memory write buffer for new data
+2. **Immutable MemTable**: Frozen MemTable being flushed to disk
+3. **SST Files**: Sorted String Table files on disk (multiple levels)
+4. **Compaction**: Background merging of SST files to reclaim space
+
+### Write Path
+
+<Steps>
+  <Step title="Write to WAL">
+    Write-ahead log for durability (Raft log)
+  </Step>
+  <Step title="Insert to MemTable">
+    In-memory update (fast)
+  </Step>
+  <Step title="Flush to SST">
+    When MemTable is full, flush to Level 0 SST
+  </Step>
+  <Step title="Compaction">
+    Background process merges and optimizes SST files
+  </Step>
+</Steps>
+
+### Read Path
+
+<Steps>
+  <Step title="Check MemTable">
+    Look for latest version in memory
+  </Step>
+  <Step title="Check Block Cache">
+    Look for cached SST blocks
+  </Step>
+  <Step title="Read SST Files">
+    Search SST files from newest to oldest
+  </Step>
+  <Step title="Merge Results">
+    Combine versions and apply tombstones
+  </Step>
+</Steps>
+
+## Performance Considerations
+
+<AccordionGroup>
+  <Accordion title="Write Amplification">
+    LSM trees rewrite data during compaction. Configure compaction strategies based on workload:
+    - Level-based: Better for read-heavy workloads
+    - Size-tiered: Better for write-heavy workloads
+  </Accordion>
+  
+  <Accordion title="Read Amplification">
+    Multiple SST files may need to be checked. Mitigate with:
+    - Bloom filters (enabled by default)
+    - Block cache sizing
+    - Regular compaction
+  </Accordion>
+  
+  <Accordion title="Space Amplification">
+    Multiple versions and tombstones consume space. Manage with:
+    - Regular compaction
+    - Appropriate TTL settings
+    - History retention policies
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Distributed Transactions" icon="arrows-rotate" href="/concepts/distributed-transactions">
+    Learn how transactions work across tablets
+  </Card>
+  <Card title="Replication" icon="copy" href="/concepts/replication">
+    Understand how data is replicated for fault tolerance
+  </Card>
+  <Card title="Consistency Model" icon="check-double" href="/concepts/consistency-model">
+    Explore consistency guarantees and isolation levels
+  </Card>
+  <Card title="Architecture" icon="sitemap" href="/concepts/architecture">
+    Review the overall system architecture
+  </Card>
+</CardGroup>

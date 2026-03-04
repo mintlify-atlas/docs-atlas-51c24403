@@ -1,0 +1,326 @@
+---
+title: Administration Guide
+description: Essential administrative tasks and commands for managing YugabyteDB clusters in production
+---
+
+This guide covers essential administrative tasks for managing YugabyteDB clusters in production environments.
+
+## Administrative Tools
+
+### yb-admin
+
+The `yb-admin` utility is the primary command-line tool for administering YugabyteDB clusters. It invokes yb-master and yb-tserver servers to perform administrative operations.
+
+**Basic Syntax:**
+
+```bash
+yb-admin --master_addresses <master-addresses> <command> [command_flags]
+```
+
+**Common Options:**
+- `--master_addresses`: Comma-separated list of YB-Master hosts and ports (default: localhost:7100)
+- `--init_master_addrs`: Single YB-Master address for discovery
+- `--timeout_ms`: RPC timeout in milliseconds (default: 60000)
+- `--certs_dir_name`: Directory with certificates for secure connections
+
+### yb-ctl
+
+Local cluster control utility for development and testing environments:
+
+```bash
+yb-ctl create --rf 3
+yb-ctl status
+yb-ctl destroy
+```
+
+## Cluster Management
+
+### List Cluster Resources
+
+**List all tablet servers:**
+
+```bash
+yb-admin --master_addresses ip1:7100,ip2:7100,ip3:7100 list_all_tablet_servers
+```
+
+**List all masters:**
+
+```bash
+yb-admin --master_addresses ip1:7100,ip2:7100,ip3:7100 list_all_masters
+```
+
+**Check universe configuration:**
+
+```bash
+yb-admin --master_addresses ip1:7100,ip2:7100,ip3:7100 get_universe_config
+```
+
+### Tablet Management
+
+**List tablets for a table:**
+
+```bash
+yb-admin --master_addresses ip1:7100,ip2:7100,ip3:7100 \
+  list_tablets ysql.db_name table_name 0
+```
+
+Output format:
+```
+Tablet UUID                       Range                           Leader
+cea3aaac2f10460a880b0b4a2a4b652a  partition_key_start: ""        127.0.0.1:9100
+```
+
+**List tablets for a tablet server:**
+
+```bash
+yb-admin --master_addresses ip1:7100,ip2:7100,ip3:7100 \
+  list_tablets_for_tablet_server <tserver-uuid>
+```
+
+### Master Configuration Changes
+
+**Add a new master:**
+
+```bash
+yb-admin --master_addresses ip1:7100,ip2:7100,ip3:7100 \
+  change_master_config ADD_SERVER <new-master-ip> 7100
+```
+
+**Remove a master:**
+
+```bash
+yb-admin --master_addresses ip1:7100,ip2:7100,ip3:7100 \
+  change_master_config REMOVE_SERVER <master-ip> 7100 <master-uuid>
+```
+
+**Verify master state:**
+
+```bash
+yb-admin --master_addresses ip1:7100,ip2:7100,ip3:7100 dump_masters_state
+```
+
+### Tablet Server Management
+
+**Change tablet configuration:**
+
+```bash
+yb-admin --master_addresses ip1:7100,ip2:7100,ip3:7100 \
+  change_config <tablet-id> ADD_SERVER <peer-uuid> PRE_VOTER
+```
+
+**Note on temporary node downtime:**
+- **< 15 minutes**: Node catches up through RPC calls
+- **> 15 minutes**: Node goes through remote bootstrap
+- **For permanent removal**: Use REMOVE_SERVER, then ADD_SERVER for replacement
+
+## Table Operations
+
+### Table Information
+
+**List all tables:**
+
+```bash
+yb-admin --master_addresses ip1:7100,ip2:7100,ip3:7100 list_tables
+```
+
+**Get table schema:**
+
+```bash
+yb-admin --master_addresses ip1:7100,ip2:7100,ip3:7100 \
+  get_table_schema ysql.db_name table_name
+```
+
+### Tablet Splitting
+
+YugabyteDB automatically splits tablets based on size thresholds. Key configuration:
+
+**tablet_split_size_threshold_bytes**: Controls when tablets are split (propagated via YB-Master heartbeats)
+
+The splitting process:
+1. YB-Master monitors tablet sizes via heartbeats
+2. Tablets exceeding threshold are marked for splitting
+3. YB-Master registers two new post-split tablets
+4. Split operation executes on leader tablet-peer
+5. Old tablet remains available until all replicas complete split
+
+## Diagnostic Tools
+
+### yb-ts-cli
+
+Tablet server diagnostic utility:
+
+```bash
+# List all tablets on a tablet server
+./yb-ts-cli list_tablets --server_address=localhost:9000
+
+# Dump tablet details
+./yb-ts-cli dump_tablet --server_address=localhost:9000 <tablet-id>
+
+# Delete a failed tablet (after RCA)
+./yb-ts-cli --server_address=<tserver-ip>:9000 delete_tablet <tablet-id> "reason"
+```
+
+### Check for Failed Tablets
+
+Use the helper script to identify failed tablets:
+
+```bash
+./bin/yb-check-failed-tablets.sh \
+  --master_addresses ip1:7100,ip2:7100,ip3:7100 \
+  --binary_path /path/to/yugabyte/bin
+```
+
+This script:
+- Lists all tablet servers
+- Checks tablet state on each server
+- Identifies tablets in FAILED state
+- Provides tombstone commands for cleanup
+
+## File Locations
+
+### Standard Paths (YugabyteDB Anywhere installations)
+
+**Software and binaries:**
+```
+/home/yugabyte/{master|tserver}/bin
+```
+
+**Configuration files:**
+```
+/home/yugabyte/{master|tserver}/conf/server.conf
+```
+
+**Data and WAL files:**
+```
+/mnt/d*/yb-data/{master|tserver}/data
+/mnt/d*/yb-data/{master|tserver}/wals
+```
+
+**Logs:**
+```
+/home/yugabyte/{master|tserver}/logs
+```
+
+**Core dumps:**
+```
+/var/yugabyte/cores
+```
+
+## Administrative Scripts
+
+### Log Cleanup
+
+Manage disk space used by logs:
+
+```bash
+./bin/log_cleanup.sh \
+  --logs_disk_percent_max 10 \
+  --postgres_max_log_size 100 \
+  --cores_disk_percent_max 10 \
+  --logs_purge_threshold 10
+```
+
+**Parameters:**
+- `--logs_disk_percent_max`: Max percentage of disk for logs (default: 10%)
+- `--postgres_max_log_size`: Max size for postgres logs in MB (default: 100MB)
+- `--cores_disk_percent_max`: Max percentage for core dumps (default: 10%)
+- `--logs_purge_threshold`: Threshold in GB before purging (default: 10GB)
+- `--gzip_only`: Only compress files, don't purge
+
+The script automatically:
+- Compresses old log files
+- Removes oldest compressed logs when threshold exceeded
+- Manages core dump file retention
+- Preserves the most recent log file
+
+### Bulk Load Operations
+
+For bulk loading data into production clusters:
+
+```bash
+./bin/bulk_load_helper.sh \
+  --tablet_id <tablet-id> \
+  --replicas <ip1,ip2,ip3> \
+  --ssh_key_file ~/.ssh/key.pem \
+  --ssh_user_name yugabyte \
+  --tablet_data_dir /path/to/local/data
+```
+
+This utility:
+- Copies generated SSTable files to production cluster
+- Distributes files to all tablet replicas
+- Creates staging directories automatically
+- Verifies tablet locations on remote servers
+
+## Cluster Control Script (ybcontrol.py)
+
+For managing multi-node clusters:
+
+```python
+./bin/ybcontrol.py \
+  --master_ips "10.1.2.3 10.1.2.4 10.1.2.5" \
+  --tserver_ips "10.1.2.3 10.1.2.4 10.1.2.5" \
+  --pem_file ~/.ssh/cluster.pem \
+  --user yugabyte
+```
+
+**Key features:**
+- Remote cluster operations via SSH
+- Start/stop services across nodes
+- Version management and deployment
+- Rolling operations support
+
+## Security Considerations
+
+### Secure Connections
+
+For TLS-enabled clusters, always specify certificates:
+
+```bash
+yb-admin --master_addresses ip1:7100,ip2:7100,ip3:7100 \
+  --certs_dir_name /path/to/certs \
+  <command>
+```
+
+### Decommissioning Nodes
+
+Properly remove nodes to maintain cluster health:
+
+1. Mark node for decommissioning
+2. Allow cluster to re-replicate data
+3. Verify no tablets remain on node
+4. Remove from master configuration
+5. Shut down services
+
+## Best Practices
+
+### Daily Operations
+
+1. **Monitor cluster health** via master UI (http://master-ip:7000)
+2. **Check tablet server status** (http://tserver-ip:9000)
+3. **Review logs** for warnings and errors
+4. **Verify replication** is up to date
+5. **Monitor disk usage** and run cleanup as needed
+
+### Scheduled Maintenance
+
+1. **Log rotation**: Run log_cleanup.sh via cron
+2. **Tablet health checks**: Monitor for FAILED tablets
+3. **Backup verification**: Ensure backups complete successfully
+4. **Performance metrics**: Track latency and throughput trends
+5. **Certificate rotation**: Update TLS certificates before expiry
+
+### Emergency Procedures
+
+1. **Node failure**: Allow automatic recovery (15 min grace period)
+2. **Disk full**: Run immediate log cleanup, then expand storage
+3. **Failed tablets**: Use yb-check-failed-tablets.sh to identify and tombstone
+4. **Split brain**: Check master quorum and network connectivity
+5. **Performance degradation**: Check slow query logs and compaction status
+
+## Next Steps
+
+- [Backup and Restore](/operations/backup-restore) - Protect your data
+- [Performance Tuning](/operations/performance-tuning) - Optimize cluster performance
+- [Monitoring](/operations/monitoring) - Set up comprehensive monitoring
+- [Troubleshooting](/operations/troubleshooting) - Resolve common issues

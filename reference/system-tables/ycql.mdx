@@ -1,0 +1,471 @@
+---
+title: YCQL System Tables
+description: Reference for YugabyteDB YCQL (Cassandra-compatible) system tables and virtual tables
+---
+
+YCQL provides system tables through the `system` and `system_schema` keyspaces. These tables expose cluster metadata, peer information, and schema details compatible with Apache Cassandra drivers.
+
+## System Keyspace Tables
+
+The `system` keyspace contains cluster topology and operational metadata.
+
+### system.local
+
+Contains information about the local node that the client is connected to. This table always returns a single row.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `key` | text | Partition key, always "local" |
+| `bootstrapped` | text | Bootstrap status ("COMPLETED") |
+| `broadcast_address` | inet | Public IP address of the node |
+| `cluster_name` | text | Cluster name ("local cluster") |
+| `cql_version` | text | CQL version supported ("3.4.2") |
+| `data_center` | text | Data center name (from cloud_info) |
+| `gossip_generation` | int | Gossip generation (always 0) |
+| `host_id` | uuid | Unique identifier for the node |
+| `listen_address` | inet | Private IP address of the node |
+| `native_protocol_version` | text | Native protocol version ("4") |
+| `partitioner` | text | Partitioner class ("org.apache.cassandra.dht.Murmur3Partitioner") |
+| `rack` | text | Rack/availability zone name |
+| `release_version` | text | YugabyteDB version string |
+| `rpc_address` | inet | RPC address (public IP) |
+| `schema_version` | uuid | Schema version identifier |
+| `thrift_version` | text | Thrift version ("20.1.0") |
+| `tokens` | set&lt;text&gt; | Token ranges owned by this node |
+| `truncated_at` | map&lt;uuid, blob&gt; | Truncation timestamps by table |
+
+**Example Query:**
+
+```cql
+SELECT cluster_name, data_center, rack, release_version, host_id 
+FROM system.local;
+```
+
+**Connection Setup Query (Common Driver Pattern):**
+
+```cql
+SELECT * FROM system.local WHERE key='local';
+```
+
+### system.peers
+
+Contains information about all peer nodes in the cluster (excludes the local node).
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `peer` | inet | Public IP address of the peer (partition key) |
+| `data_center` | text | Data center name |
+| `host_id` | uuid | Unique identifier for the peer |
+| `preferred_ip` | inet | Private IP address |
+| `rack` | text | Rack/availability zone name |
+| `release_version` | text | YugabyteDB version string |
+| `rpc_address` | inet | RPC address (public IP) |
+| `schema_version` | uuid | Schema version identifier |
+| `tokens` | set&lt;text&gt; | Token ranges owned by this peer |
+
+**Example Query:**
+
+```cql
+SELECT peer, data_center, rack, release_version, rpc_address 
+FROM system.peers;
+```
+
+**Topology Discovery (Driver Pattern):**
+
+```cql
+SELECT peer, data_center, rack, release_version, rpc_address, tokens 
+FROM system.peers;
+```
+
+<Note>
+YugabyteDB does not support `system.peers_v2`. Clients querying this table will receive an error directing them to use `system.peers` instead.
+</Note>
+
+### system.partitions
+
+Provides tablet partition information for tables.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `keyspace_name` | text | Keyspace name |
+| `table_name` | text | Table name |
+| `start_key` | text | Start key of the partition range |
+| `end_key` | text | End key of the partition range |
+| `replica_addresses` | list&lt;inet&gt; | IP addresses of replicas |
+
+**Example Query:**
+
+```cql
+SELECT keyspace_name, table_name, start_key, end_key, replica_addresses 
+FROM system.partitions;
+```
+
+## System Schema Keyspace
+
+The `system_schema` keyspace contains metadata about user-defined schema objects.
+
+### system_schema.keyspaces
+
+Stores information about all keyspaces in the cluster.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `keyspace_name` | text | Keyspace name (partition key) |
+| `durable_writes` | boolean | Whether durable writes are enabled |
+| `replication` | map&lt;text, text&gt; | Replication strategy and options |
+
+**Example Query:**
+
+```cql
+SELECT keyspace_name, durable_writes, replication 
+FROM system_schema.keyspaces;
+```
+
+**Filter for User Keyspaces:**
+
+```cql
+SELECT * FROM system_schema.keyspaces 
+WHERE keyspace_name NOT IN ('system', 'system_schema', 'system_auth');
+```
+
+### system_schema.tables
+
+Contains metadata about all tables in the cluster.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `keyspace_name` | text | Keyspace name (partition key) |
+| `table_name` | text | Table name (clustering key) |
+| `bloom_filter_fp_chance` | double | Bloom filter false positive probability |
+| `caching` | map&lt;text, text&gt; | Caching options |
+| `comment` | text | Table comment/description |
+| `compaction` | map&lt;text, text&gt; | Compaction strategy |
+| `compression` | map&lt;text, text&gt; | Compression options |
+| `crc_check_chance` | double | CRC check probability |
+| `dclocal_read_repair_chance` | double | DC-local read repair chance |
+| `default_time_to_live` | int | Default TTL in seconds |
+| `extensions` | map&lt;text, blob&gt; | Extension metadata |
+| `flags` | set&lt;text&gt; | Table flags |
+| `gc_grace_seconds` | int | Grace period for tombstone GC |
+| `id` | uuid | Unique table identifier |
+| `max_index_interval` | int | Maximum index interval |
+| `memtable_flush_period_in_ms` | int | Memtable flush period |
+| `min_index_interval` | int | Minimum index interval |
+| `read_repair_chance` | double | Read repair probability |
+| `speculative_retry` | text | Speculative retry policy |
+
+**Example Query:**
+
+```cql
+SELECT keyspace_name, table_name, id, default_time_to_live, comment 
+FROM system_schema.tables;
+```
+
+### system_schema.columns
+
+Describes all columns for all tables.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `keyspace_name` | text | Keyspace name (partition key) |
+| `table_name` | text | Table name (clustering key) |
+| `column_name` | text | Column name (clustering key) |
+| `clustering_order` | text | Clustering order ("asc" or "desc") |
+| `column_name_bytes` | blob | Column name as bytes |
+| `kind` | text | Column kind ("partition_key", "clustering", "regular", "static") |
+| `position` | int | Position in key (for key columns) |
+| `type` | text | CQL data type |
+
+**Example Query:**
+
+```cql
+SELECT keyspace_name, table_name, column_name, kind, type, position 
+FROM system_schema.columns
+WHERE keyspace_name = 'my_keyspace'
+AND table_name = 'my_table';
+```
+
+**Find Partition Keys:**
+
+```cql
+SELECT keyspace_name, table_name, column_name, position
+FROM system_schema.columns
+WHERE kind = 'partition_key'
+ALLOW FILTERING;
+```
+
+### system_schema.indexes
+
+Stores information about secondary indexes.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `keyspace_name` | text | Keyspace name (partition key) |
+| `table_name` | text | Base table name (clustering key) |
+| `index_name` | text | Index name (clustering key) |
+| `kind` | text | Index kind ("COMPOSITES") |
+| `options` | map&lt;text, text&gt; | Index options and target column |
+
+**Example Query:**
+
+```cql
+SELECT keyspace_name, table_name, index_name, options 
+FROM system_schema.indexes;
+```
+
+### system_schema.views
+
+Contains metadata about materialized views.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `keyspace_name` | text | Keyspace name (partition key) |
+| `view_name` | text | View name (clustering key) |
+| `base_table_id` | uuid | ID of the base table |
+| `base_table_name` | text | Name of the base table |
+| `bloom_filter_fp_chance` | double | Bloom filter false positive probability |
+| `caching` | map&lt;text, text&gt; | Caching configuration |
+| `comment` | text | View comment |
+| `compaction` | map&lt;text, text&gt; | Compaction strategy |
+| `compression` | map&lt;text, text&gt; | Compression options |
+| `crc_check_chance` | double | CRC check probability |
+| `dclocal_read_repair_chance` | double | DC-local read repair chance |
+| `default_time_to_live` | int | Default TTL |
+| `extensions` | map&lt;text, text&gt; | Extension metadata |
+| `gc_grace_seconds` | int | Tombstone grace period |
+| `id` | uuid | Unique view identifier |
+| `include_all_columns` | boolean | Whether all columns are included |
+| `max_index_interval` | int | Maximum index interval |
+| `memtable_flush_period_in_ms` | int | Memtable flush period |
+| `min_index_interval` | int | Minimum index interval |
+| `read_repair_chance` | double | Read repair probability |
+| `speculative_retry` | text | Speculative retry policy |
+| `where_clause` | text | View WHERE clause filter |
+
+**Example Query:**
+
+```cql
+SELECT keyspace_name, view_name, base_table_name, where_clause 
+FROM system_schema.views;
+```
+
+### system_schema.types
+
+Stores user-defined types (UDTs).
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `keyspace_name` | text | Keyspace name (partition key) |
+| `type_name` | text | Type name (clustering key) |
+| `field_names` | list&lt;text&gt; | Names of UDT fields |
+| `field_types` | list&lt;text&gt; | Types of UDT fields |
+
+**Example Query:**
+
+```cql
+SELECT keyspace_name, type_name, field_names, field_types 
+FROM system_schema.types;
+```
+
+### system_schema.functions
+
+Contains user-defined functions (currently a virtual table that may return no rows).
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `keyspace_name` | text | Keyspace name (partition key) |
+| `function_name` | text | Function name |
+| `argument_types` | list&lt;text&gt; | Input argument types |
+| `argument_names` | list&lt;text&gt; | Input argument names |
+| `body` | text | Function body |
+| `called_on_null_input` | boolean | Whether function is called on NULL input |
+| `language` | text | Implementation language |
+| `return_type` | text | Return data type |
+
+**Example Query:**
+
+```cql
+SELECT * FROM system_schema.functions;
+```
+
+### system_schema.aggregates
+
+Stores user-defined aggregates (currently a virtual table that may return no rows).
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `keyspace_name` | text | Keyspace name (partition key) |
+| `aggregate_name` | text | Aggregate name |
+| `argument_types` | list&lt;text&gt; | Input argument types |
+| `final_func` | text | Final transformation function |
+| `initcond` | text | Initial condition |
+| `return_type` | text | Return data type |
+| `state_func` | text | State transformation function |
+| `state_type` | text | State data type |
+
+**Example Query:**
+
+```cql
+SELECT * FROM system_schema.aggregates;
+```
+
+### system_schema.triggers
+
+Contains trigger definitions (currently a virtual table that may return no rows).
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `keyspace_name` | text | Keyspace name (partition key) |
+| `table_name` | text | Table name |
+| `trigger_name` | text | Trigger name |
+| `options` | map&lt;text, text&gt; | Trigger options |
+
+**Example Query:**
+
+```cql
+SELECT * FROM system_schema.triggers;
+```
+
+## Common Query Patterns
+
+### Cluster Topology Discovery
+
+Get complete cluster topology information:
+
+```cql
+-- Local node information
+SELECT data_center, rack, release_version, host_id 
+FROM system.local WHERE key='local';
+
+-- All peer nodes
+SELECT peer, data_center, rack, release_version, host_id 
+FROM system.peers;
+```
+
+### Schema Version Consistency Check
+
+Verify that all nodes have the same schema version:
+
+```cql
+-- Get local schema version
+SELECT schema_version FROM system.local WHERE key='local';
+
+-- Get peer schema versions
+SELECT peer, schema_version FROM system.peers;
+```
+
+### Table Schema Inspection
+
+Retrieve complete schema for a table:
+
+```cql
+-- Table metadata
+SELECT * FROM system_schema.tables 
+WHERE keyspace_name = 'my_keyspace' 
+AND table_name = 'my_table';
+
+-- Column definitions
+SELECT column_name, kind, type, position 
+FROM system_schema.columns
+WHERE keyspace_name = 'my_keyspace' 
+AND table_name = 'my_table';
+
+-- Indexes on the table
+SELECT index_name, options 
+FROM system_schema.indexes
+WHERE keyspace_name = 'my_keyspace' 
+AND table_name = 'my_table';
+```
+
+### Keyspace Replication Analysis
+
+Analyze replication configuration across keyspaces:
+
+```cql
+SELECT keyspace_name, replication 
+FROM system_schema.keyspaces
+WHERE keyspace_name NOT IN ('system', 'system_schema');
+```
+
+### Data Center Distribution
+
+Check node distribution across data centers:
+
+```cql
+-- Count by data center (requires manual aggregation)
+SELECT data_center FROM system.local WHERE key='local';
+SELECT data_center FROM system.peers;
+```
+
+### Find All Tables with TTL
+
+Identify tables with default TTL configured:
+
+```cql
+SELECT keyspace_name, table_name, default_time_to_live 
+FROM system_schema.tables
+WHERE default_time_to_live > 0
+ALLOW FILTERING;
+```
+
+### List Partition and Clustering Keys
+
+```cql
+-- Partition keys
+SELECT keyspace_name, table_name, column_name, position
+FROM system_schema.columns
+WHERE kind = 'partition_key'
+ALLOW FILTERING;
+
+-- Clustering keys
+SELECT keyspace_name, table_name, column_name, position, clustering_order
+FROM system_schema.columns
+WHERE kind = 'clustering'
+ALLOW FILTERING;
+```
+
+## Virtual Table Implementation
+
+YugabyteDB implements system tables as virtual tables, meaning:
+
+- Data is computed dynamically from the master's metadata
+- No physical storage is used for system tables
+- Queries against system tables are routed to the master leader
+- Performance is optimized for common driver connection patterns
+
+### Cached System Queries
+
+YugabyteDB caches responses for frequently executed system queries to improve driver connection performance. Cached queries include:
+
+- `SELECT * FROM system.local WHERE key='local'`
+- `SELECT * FROM system.peers`
+- Schema discovery queries from `system_schema` tables
+
+Caching behavior can be controlled with these flags:
+- `cql_update_system_query_cache_msecs` - Cache refresh interval
+- `cql_system_query_cache_stale_msecs` - Maximum cache staleness
+- `cql_system_query_cache_empty_responses` - Whether to cache empty responses
+
+## Compatibility Notes
+
+### Cassandra Compatibility
+
+YugabyteDB's YCQL system tables maintain compatibility with Apache Cassandra drivers:
+
+- Column names and types match Cassandra 3.x schema
+- Virtual tokens are generated for driver compatibility
+- Schema version UUIDs are consistent across nodes
+
+### Differences from Cassandra
+
+1. **No system.peers_v2**: YugabyteDB only supports `system.peers`
+2. **Virtual tokens**: Token values are computed dynamically, not stored
+3. **Single-host system.local**: Always returns one row for the connected node
+4. **Schema propagation**: Uses YugabyteDB's catalog versioning instead of gossip
+5. **Empty virtual tables**: Some tables (functions, aggregates, triggers) may be empty if features are not yet implemented
+
+## See Also
+
+- [YSQL System Tables](/reference/system-tables/ysql) - PostgreSQL-compatible system tables
+- [YCQL API Reference](/api/ycql/) - YCQL language reference
+- [Cassandra System Tables](https://cassandra.apache.org/doc/latest/cql/system-tables.html) - Apache Cassandra documentation

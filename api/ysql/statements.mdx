@@ -1,0 +1,657 @@
+---
+title: YSQL Statements
+headerTitle: SQL Statements
+linkTitle: Statements
+description: Reference for DDL, DML, DCL, and TCL statements in YSQL
+---
+
+YSQL supports all standard SQL statement types for managing databases, schemas, tables, and data. Statements are organized into several categories.
+
+## Data Definition Language (DDL)
+
+DDL statements define and modify database schema objects.
+
+### Database Statements
+
+```sql
+-- Create database
+CREATE DATABASE myapp;
+
+-- Alter database
+ALTER DATABASE myapp SET timezone = 'UTC';
+
+-- Drop database
+DROP DATABASE myapp;
+
+-- List databases
+\l
+```
+
+### Schema Statements
+
+```sql
+-- Create schema
+CREATE SCHEMA sales;
+
+-- Create schema with authorization
+CREATE SCHEMA sales AUTHORIZATION sales_admin;
+
+-- Set search path
+SET search_path TO sales, public;
+
+-- Drop schema
+DROP SCHEMA sales CASCADE;
+```
+
+### Table Statements
+
+#### CREATE TABLE
+
+YugabyteDB extends PostgreSQL's `CREATE TABLE` with distributed database features.
+
+<ParamField path="PRIMARY KEY" type="constraint">
+  Every table requires a primary key (explicit or implicit). YugabyteDB uses the primary key for data distribution.
+</ParamField>
+
+```sql
+-- Basic table
+CREATE TABLE users (
+  user_id SERIAL PRIMARY KEY,
+  username TEXT NOT NULL UNIQUE,
+  email TEXT NOT NULL,
+  created_at TIMESTAMP DEFAULT now()
+);
+
+-- Hash sharding (default)
+CREATE TABLE orders (
+  order_id INT,
+  customer_id INT,
+  order_date DATE,
+  total NUMERIC(10,2),
+  PRIMARY KEY (order_id)
+);
+
+-- Range sharding
+CREATE TABLE time_series (
+  ts TIMESTAMP,
+  sensor_id INT,
+  value DOUBLE PRECISION,
+  PRIMARY KEY (ts ASC, sensor_id)
+);
+
+-- Hash + Range composite sharding
+CREATE TABLE user_events (
+  user_id INT,
+  event_type TEXT,
+  event_time TIMESTAMP,
+  data JSONB,
+  PRIMARY KEY ((user_id) HASH, event_type, event_time DESC)
+);
+
+-- Table with splits (pre-splitting)
+CREATE TABLE metrics (
+  metric_date DATE,
+  metric_name TEXT,
+  value BIGINT,
+  PRIMARY KEY (metric_date ASC)
+) SPLIT AT VALUES (
+  ('2024-01-01'),
+  ('2024-04-01'),
+  ('2024-07-01'),
+  ('2024-10-01')
+);
+
+-- Table with tablespace (geo-distribution)
+CREATE TABLE eu_customers (
+  customer_id INT PRIMARY KEY,
+  name TEXT,
+  country TEXT
+) TABLESPACE eu_west;
+```
+
+#### ALTER TABLE
+
+```sql
+-- Add column
+ALTER TABLE users ADD COLUMN phone TEXT;
+
+-- Drop column
+ALTER TABLE users DROP COLUMN phone;
+
+-- Rename column
+ALTER TABLE users RENAME COLUMN username TO user_name;
+
+-- Add constraint
+ALTER TABLE orders 
+ADD CONSTRAINT fk_customer 
+FOREIGN KEY (customer_id) 
+REFERENCES users(user_id);
+
+-- Drop constraint
+ALTER TABLE orders DROP CONSTRAINT fk_customer;
+
+-- Change column type
+ALTER TABLE users ALTER COLUMN email TYPE VARCHAR(255);
+```
+
+#### DROP TABLE
+
+```sql
+-- Drop single table
+DROP TABLE users;
+
+-- Drop if exists
+DROP TABLE IF EXISTS users;
+
+-- Drop with cascade
+DROP TABLE users CASCADE;
+```
+
+### Index Statements
+
+```sql
+-- Create index
+CREATE INDEX idx_users_email ON users(email);
+
+-- Create unique index
+CREATE UNIQUE INDEX idx_users_username ON users(username);
+
+-- Create partial index
+CREATE INDEX idx_active_users ON users(created_at) 
+WHERE deleted_at IS NULL;
+
+-- Create expression index
+CREATE INDEX idx_users_lower_email ON users(LOWER(email));
+
+-- Create covering index (include columns)
+CREATE INDEX idx_orders_customer 
+ON orders(customer_id) 
+INCLUDE (order_date, total);
+
+-- Create GIN index for JSONB
+CREATE INDEX idx_data_gin ON events USING gin(data);
+
+-- Create index with tablespace
+CREATE INDEX idx_users_created 
+ON users(created_at) 
+TABLESPACE pg_default;
+
+-- Drop index
+DROP INDEX idx_users_email;
+
+-- Rebuild index
+REINDEX INDEX idx_users_email;
+```
+
+### View Statements
+
+```sql
+-- Create view
+CREATE VIEW active_users AS
+SELECT user_id, username, email
+FROM users
+WHERE deleted_at IS NULL;
+
+-- Create or replace view
+CREATE OR REPLACE VIEW user_summary AS
+SELECT 
+  user_id,
+  username,
+  COUNT(order_id) AS order_count
+FROM users
+LEFT JOIN orders USING (user_id)
+GROUP BY user_id, username;
+
+-- Create materialized view
+CREATE MATERIALIZED VIEW daily_sales AS
+SELECT 
+  DATE(order_date) AS sale_date,
+  SUM(total) AS total_sales,
+  COUNT(*) AS order_count
+FROM orders
+GROUP BY DATE(order_date);
+
+-- Refresh materialized view
+REFRESH MATERIALIZED VIEW daily_sales;
+
+-- Drop view
+DROP VIEW active_users;
+```
+
+### Sequence Statements
+
+```sql
+-- Create sequence
+CREATE SEQUENCE order_seq START 1000 INCREMENT 1;
+
+-- Use sequence
+INSERT INTO orders (order_id, customer_id, total)
+VALUES (nextval('order_seq'), 1, 100.00);
+
+-- Get current value
+SELECT currval('order_seq');
+
+-- Set sequence value
+SELECT setval('order_seq', 5000);
+
+-- Drop sequence
+DROP SEQUENCE order_seq;
+```
+
+### Type Statements
+
+```sql
+-- Create enum type
+CREATE TYPE order_status AS ENUM (
+  'pending', 'processing', 'shipped', 'delivered', 'cancelled'
+);
+
+-- Create composite type
+CREATE TYPE address_type AS (
+  street TEXT,
+  city TEXT,
+  state TEXT,
+  zip_code TEXT
+);
+
+-- Create domain type
+CREATE DOMAIN email_address AS TEXT
+CHECK (VALUE ~ '^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$');
+
+-- Use custom type
+CREATE TABLE orders (
+  order_id INT PRIMARY KEY,
+  status order_status DEFAULT 'pending',
+  shipping_address address_type
+);
+```
+
+## Data Manipulation Language (DML)
+
+DML statements query and modify data.
+
+### SELECT
+
+```sql
+-- Basic select
+SELECT * FROM users;
+
+-- Select with WHERE clause
+SELECT username, email 
+FROM users 
+WHERE created_at > '2024-01-01';
+
+-- Select with JOIN
+SELECT 
+  u.username,
+  o.order_id,
+  o.total
+FROM users u
+INNER JOIN orders o ON u.user_id = o.customer_id
+WHERE o.order_date > CURRENT_DATE - INTERVAL '30 days';
+
+-- Select with aggregation
+SELECT 
+  customer_id,
+  COUNT(*) AS order_count,
+  SUM(total) AS total_spent
+FROM orders
+GROUP BY customer_id
+HAVING SUM(total) > 1000
+ORDER BY total_spent DESC;
+
+-- Select with window function
+SELECT 
+  order_id,
+  customer_id,
+  total,
+  RANK() OVER (PARTITION BY customer_id ORDER BY total DESC) AS rank
+FROM orders;
+
+-- Select with CTE
+WITH customer_stats AS (
+  SELECT 
+    customer_id,
+    COUNT(*) AS order_count,
+    AVG(total) AS avg_order
+  FROM orders
+  GROUP BY customer_id
+)
+SELECT 
+  u.username,
+  cs.order_count,
+  cs.avg_order
+FROM users u
+JOIN customer_stats cs ON u.user_id = cs.customer_id
+WHERE cs.order_count > 5;
+```
+
+### INSERT
+
+```sql
+-- Insert single row
+INSERT INTO users (username, email)
+VALUES ('alice', 'alice@example.com');
+
+-- Insert multiple rows
+INSERT INTO users (username, email) VALUES
+  ('bob', 'bob@example.com'),
+  ('charlie', 'charlie@example.com'),
+  ('diana', 'diana@example.com');
+
+-- Insert with RETURNING
+INSERT INTO users (username, email)
+VALUES ('eve', 'eve@example.com')
+RETURNING user_id, created_at;
+
+-- Insert from SELECT
+INSERT INTO archived_orders
+SELECT * FROM orders
+WHERE order_date < '2023-01-01';
+
+-- Insert with ON CONFLICT (upsert)
+INSERT INTO users (user_id, username, email)
+VALUES (1, 'alice', 'alice@example.com')
+ON CONFLICT (user_id) 
+DO UPDATE SET 
+  username = EXCLUDED.username,
+  email = EXCLUDED.email,
+  updated_at = now();
+```
+
+### UPDATE
+
+```sql
+-- Update single row
+UPDATE users 
+SET email = 'newemail@example.com'
+WHERE user_id = 1;
+
+-- Update multiple columns
+UPDATE orders
+SET 
+  status = 'shipped',
+  shipped_at = now()
+WHERE order_id = 1001;
+
+-- Update with FROM clause
+UPDATE orders o
+SET total = o.total * 1.1
+FROM users u
+WHERE o.customer_id = u.user_id
+  AND u.is_premium = true;
+
+-- Update with RETURNING
+UPDATE orders
+SET status = 'delivered'
+WHERE order_id = 1001
+RETURNING order_id, status, updated_at;
+```
+
+### DELETE
+
+```sql
+-- Delete single row
+DELETE FROM users WHERE user_id = 999;
+
+-- Delete with condition
+DELETE FROM orders 
+WHERE order_date < '2023-01-01';
+
+-- Delete with USING clause
+DELETE FROM orders o
+USING users u
+WHERE o.customer_id = u.user_id
+  AND u.deleted_at IS NOT NULL;
+
+-- Delete with RETURNING
+DELETE FROM orders
+WHERE status = 'cancelled'
+RETURNING order_id, customer_id;
+
+-- Truncate table (faster than DELETE)
+TRUNCATE TABLE logs;
+```
+
+### COPY
+
+```sql
+-- Copy from CSV file
+COPY users (username, email) 
+FROM '/tmp/users.csv' 
+WITH (FORMAT csv, HEADER true);
+
+-- Copy to CSV file
+COPY (SELECT * FROM users WHERE created_at > '2024-01-01')
+TO '/tmp/recent_users.csv'
+WITH (FORMAT csv, HEADER true);
+
+-- Copy from STDIN
+COPY users (username, email) FROM STDIN;
+alice\talice@example.com
+bob\tbob@example.com
+\.
+```
+
+## Data Control Language (DCL)
+
+DCL statements manage database security and permissions.
+
+### Role Management
+
+```sql
+-- Create role
+CREATE ROLE app_user WITH LOGIN PASSWORD 'secure_password';
+
+-- Create role with attributes
+CREATE ROLE admin WITH 
+  SUPERUSER 
+  CREATEDB 
+  CREATEROLE 
+  LOGIN 
+  PASSWORD 'admin_password';
+
+-- Alter role
+ALTER ROLE app_user WITH PASSWORD 'new_password';
+
+-- Grant role to user
+GRANT admin TO app_user;
+
+-- Revoke role
+REVOKE admin FROM app_user;
+
+-- Drop role
+DROP ROLE app_user;
+```
+
+### Permission Management
+
+```sql
+-- Grant table privileges
+GRANT SELECT, INSERT, UPDATE ON users TO app_user;
+
+-- Grant all privileges
+GRANT ALL PRIVILEGES ON orders TO app_user;
+
+-- Grant schema privileges
+GRANT USAGE ON SCHEMA sales TO app_user;
+GRANT SELECT ON ALL TABLES IN SCHEMA sales TO app_user;
+
+-- Grant database privileges
+GRANT CONNECT ON DATABASE myapp TO app_user;
+
+-- Revoke privileges
+REVOKE INSERT ON users FROM app_user;
+
+-- Grant with grant option
+GRANT SELECT ON users TO app_user WITH GRANT OPTION;
+```
+
+### Row-Level Security
+
+```sql
+-- Enable RLS
+ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
+
+-- Create policy
+CREATE POLICY user_orders ON orders
+  FOR SELECT
+  USING (customer_id = current_user_id());
+
+-- Create policy for INSERT
+CREATE POLICY insert_own_orders ON orders
+  FOR INSERT
+  WITH CHECK (customer_id = current_user_id());
+
+-- Drop policy
+DROP POLICY user_orders ON orders;
+
+-- Disable RLS
+ALTER TABLE orders DISABLE ROW LEVEL SECURITY;
+```
+
+## Transaction Control
+
+```sql
+-- Begin transaction
+BEGIN;
+
+-- Set isolation level
+BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+
+-- Savepoint
+SAVEPOINT my_savepoint;
+
+-- Rollback to savepoint
+ROLLBACK TO SAVEPOINT my_savepoint;
+
+-- Commit transaction
+COMMIT;
+
+-- Rollback transaction
+ROLLBACK;
+```
+
+## Procedural Language
+
+### Functions
+
+```sql
+-- Create function
+CREATE FUNCTION get_user_order_count(p_user_id INT)
+RETURNS BIGINT AS $$
+  SELECT COUNT(*) FROM orders WHERE customer_id = p_user_id;
+$$ LANGUAGE SQL;
+
+-- Create PL/pgSQL function
+CREATE FUNCTION calculate_discount(p_total NUMERIC)
+RETURNS NUMERIC AS $$
+DECLARE
+  v_discount NUMERIC := 0;
+BEGIN
+  IF p_total > 1000 THEN
+    v_discount := p_total * 0.1;
+  ELSIF p_total > 500 THEN
+    v_discount := p_total * 0.05;
+  END IF;
+  RETURN v_discount;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Use function
+SELECT calculate_discount(750.00);
+```
+
+### Stored Procedures
+
+```sql
+-- Create procedure
+CREATE PROCEDURE process_order(
+  p_customer_id INT,
+  p_total NUMERIC
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  INSERT INTO orders (customer_id, total, order_date)
+  VALUES (p_customer_id, p_total, CURRENT_DATE);
+  
+  UPDATE users 
+  SET last_order_date = CURRENT_DATE
+  WHERE user_id = p_customer_id;
+  
+  COMMIT;
+END;
+$$;
+
+-- Call procedure
+CALL process_order(1, 299.99);
+```
+
+### Triggers
+
+```sql
+-- Create trigger function
+CREATE FUNCTION update_modified_timestamp()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = now();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Create trigger
+CREATE TRIGGER users_update_timestamp
+BEFORE UPDATE ON users
+FOR EACH ROW
+EXECUTE FUNCTION update_modified_timestamp();
+
+-- Drop trigger
+DROP TRIGGER users_update_timestamp ON users;
+```
+
+## YugabyteDB-Specific Features
+
+### Tablespace Management
+
+```sql
+-- Create tablespace for geo-distribution
+CREATE TABLESPACE us_west WITH (
+  replica_placement='{"num_replicas":3, "placement_blocks":[
+    {"cloud":"aws","region":"us-west-2","zone":"us-west-2a","min_num_replicas":1}
+  ]}'
+);
+
+-- Assign table to tablespace
+CREATE TABLE us_orders (
+  order_id INT PRIMARY KEY,
+  customer_id INT,
+  total NUMERIC
+) TABLESPACE us_west;
+```
+
+### Colocated Tables
+
+```sql
+-- Create colocated database
+CREATE DATABASE small_db WITH COLOCATION = true;
+
+-- Create colocated table (default)
+CREATE TABLE lookup_table (
+  id INT PRIMARY KEY,
+  value TEXT
+);
+
+-- Create non-colocated table in colocated database
+CREATE TABLE large_table (
+  id INT PRIMARY KEY,
+  data TEXT
+) WITH (COLOCATION = false);
+```
+
+## Additional Resources
+
+- [PostgreSQL SQL Commands](https://www.postgresql.org/docs/15/sql-commands.html)
+- [YSQL Data Types](/api/ysql/data-types)
+- [YSQL Functions](/api/ysql/functions)
+- [YSQL Extensions](/api/ysql/extensions)

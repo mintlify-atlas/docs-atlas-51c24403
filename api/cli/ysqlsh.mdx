@@ -1,0 +1,533 @@
+---
+title: ysqlsh
+description: YSQL shell for interacting with YugabyteDB
+---
+
+`ysqlsh` is the command-line shell for interacting with YugabyteDB using the YSQL API (PostgreSQL-compatible).
+
+## Synopsis
+
+```bash
+ysqlsh [option...] [dbname [username]]
+```
+
+## Description
+
+ysqlsh is a terminal-based front-end to YugabyteDB. It enables you to:
+- Execute SQL queries interactively and view results
+- Execute queries from files or scripts
+- Use meta-commands for database administration
+- Automate database operations with scripting
+
+ysqlsh is based on PostgreSQL's psql and supports most of its functionality.
+
+## Installation
+
+ysqlsh is installed with YugabyteDB and located in the `bin` directory. A standalone version is also available through the YugabyteDB clients package.
+
+## Default Connection Parameters
+
+When no flags are specified, ysqlsh uses these defaults:
+- Host: `127.0.0.1` (localhost)
+- Port: `5433`
+- User: `yugabyte`
+- Database: `yugabyte`
+- Password: `yugabyte` (for manually deployed or insecure clusters)
+
+## Connection Flags
+
+### -h, --host=HOSTNAME
+
+Database server hostname or IP address.
+
+```bash
+ysqlsh -h 192.168.1.100
+```
+
+### -p, --port=PORT
+
+Database server port number (default: 5433).
+
+```bash
+ysqlsh -p 5433
+```
+
+### -U, --username=USERNAME
+
+Database user name (default: yugabyte).
+
+```bash
+ysqlsh -U myuser
+```
+
+### -d, --dbname=DBNAME
+
+Database name to connect to (default: yugabyte).
+
+```bash
+ysqlsh -d northwind
+```
+
+### -W, --password
+
+Force password prompt before connecting.
+
+```bash
+ysqlsh -U myuser -W
+```
+
+### Connection String
+
+You can use PostgreSQL connection strings or URIs:
+
+```bash
+ysqlsh "postgresql://yugabyte@localhost:5433/mydb"
+ysqlsh "host=localhost port=5433 dbname=mydb user=yugabyte sslmode=require"
+```
+
+## Output Formatting Flags
+
+### -A, --no-align
+
+Unaligned table output mode (useful for scripting).
+
+```bash
+ysqlsh -A -c "SELECT * FROM users"
+```
+
+### -H, --html
+
+HTML table output format.
+
+```bash
+ysqlsh -H -c "SELECT * FROM users" > output.html
+```
+
+### -t, --tuples-only
+
+Print rows only, without column headers and footers.
+
+```bash
+ysqlsh -t -c "SELECT name FROM users"
+```
+
+### -x, --expanded
+
+Expanded table formatting mode (one column per line).
+
+```bash
+ysqlsh -x -c "SELECT * FROM users WHERE id = 1"
+```
+
+### -F, --field-separator=STRING
+
+Field separator for unaligned output (default: pipe `|`).
+
+```bash
+ysqlsh -A -F ',' -c "SELECT * FROM users"
+```
+
+### -R, --record-separator=STRING
+
+Record separator for unaligned output (default: newline).
+
+```bash
+ysqlsh -A -R ';' -c "SELECT * FROM users"
+```
+
+## Query Execution Flags
+
+### -c, --command=COMMAND
+
+Execute a single SQL command and exit.
+
+```bash
+ysqlsh -c "CREATE TABLE users (id SERIAL PRIMARY KEY, name TEXT)"
+ysqlsh -c "SELECT * FROM users"
+```
+
+Multiple commands can be executed with multiple `-c` flags:
+
+```bash
+ysqlsh -c "\dt" -c "SELECT version()"
+```
+
+### -f, --file=FILENAME
+
+Execute commands from a file and exit.
+
+```bash
+ysqlsh -f schema.sql
+ysqlsh -f /path/to/script.sql -d mydb
+```
+
+### -v, --set=, --variable=NAME=VALUE
+
+Set a variable for use in SQL scripts.
+
+```bash
+ysqlsh -v table_name=users -f query.sql
+```
+
+In `query.sql`:
+```sql
+SELECT * FROM :table_name;
+```
+
+### -1, --single-transaction
+
+Execute file as a single transaction.
+
+```bash
+ysqlsh -1 -f migration.sql
+```
+
+## Behavior Flags
+
+### -a, --echo-all
+
+Print all input lines to standard output.
+
+```bash
+ysqlsh -a -f script.sql
+```
+
+### -b, --echo-errors
+
+Print failed SQL commands to standard error.
+
+```bash
+ysqlsh -b -f script.sql
+```
+
+### -e, --echo-queries
+
+Echo commands sent to the server.
+
+```bash
+ysqlsh -e -c "SELECT * FROM users"
+```
+
+### -E, --echo-hidden
+
+Display the actual queries executed by meta-commands.
+
+```bash
+ysqlsh -E
+```
+
+Then run `\dt` to see the underlying SQL.
+
+### -L, --log-file=FILENAME
+
+Log session to a file.
+
+```bash
+ysqlsh -L session.log
+```
+
+### -n, --no-readline
+
+Disable command-line editing (readline).
+
+```bash
+ysqlsh -n
+```
+
+### -o, --output=FILENAME
+
+Redirect query output to a file.
+
+```bash
+ysqlsh -o results.txt -c "SELECT * FROM users"
+```
+
+### -q, --quiet
+
+Quiet mode (suppress welcome message and prompts).
+
+```bash
+ysqlsh -q -c "SELECT count(*) FROM users"
+```
+
+### -s, --single-step
+
+Single-step mode (confirm each query before execution).
+
+```bash
+ysqlsh -s -f script.sql
+```
+
+### -S, --single-line
+
+Single-line mode (newline terminates SQL command).
+
+```bash
+ysqlsh -S
+```
+
+## Information Flags
+
+### -l, --list
+
+List available databases and exit.
+
+```bash
+ysqlsh -l
+```
+
+### -V, --version
+
+Print version and exit.
+
+```bash
+ysqlsh -V
+```
+
+### -?, --help[=options]
+
+Show help and exit.
+
+```bash
+ysqlsh --help
+ysqlsh --help=variables
+ysqlsh --help=commands
+```
+
+## Common Usage Examples
+
+### Connect to a Database
+
+```bash
+# Connect to default database
+ysqlsh
+
+# Connect to specific database
+ysqlsh -d northwind
+
+# Connect to remote host
+ysqlsh -h 192.168.1.100 -p 5433 -U yugabyte -d mydb
+
+# Connect with SSL
+ysqlsh "postgresql://yugabyte@localhost:5433/mydb?sslmode=require"
+```
+
+### Execute Queries
+
+```bash
+# Single query
+ysqlsh -c "SELECT * FROM employees LIMIT 10"
+
+# Multiple queries
+ysqlsh -c "CREATE DATABASE testdb" -c "\c testdb" -c "CREATE TABLE test (id INT)"
+
+# From file
+ysqlsh -f schema.sql -d mydb
+
+# Pipe query
+echo "SELECT version()" | ysqlsh
+```
+
+### Export Data
+
+```bash
+# CSV format
+ysqlsh -A -F ',' -c "SELECT * FROM users" > users.csv
+
+# Tab-separated
+ysqlsh -A -F $'\t' -c "SELECT * FROM users" > users.tsv
+
+# HTML format
+ysqlsh -H -c "SELECT * FROM users" > users.html
+```
+
+### Run Scripts
+
+```bash
+# Execute script
+ysqlsh -f migration.sql
+
+# Execute in transaction
+ysqlsh -1 -f migration.sql
+
+# With variables
+ysqlsh -v env=production -f deploy.sql
+
+# Log output
+ysqlsh -f script.sql -L execution.log
+```
+
+### Database Administration
+
+```bash
+# List databases
+ysqlsh -l
+
+# List tables in database
+ysqlsh -d mydb -c "\dt"
+
+# Describe table
+ysqlsh -c "\d users"
+
+# Database size
+ysqlsh -c "SELECT pg_size_pretty(pg_database_size('mydb'))"
+```
+
+## Interactive Mode
+
+When started without the `-c` or `-f` flags, ysqlsh enters interactive mode:
+
+```bash
+$ ysqlsh
+ysqlsh (15.2-YB-2.25.0.0-b0)
+Type "help" for help.
+
+yugabyte=# 
+```
+
+### Interactive Commands
+
+In interactive mode, you can:
+- Type SQL statements terminated by semicolon (`;`)
+- Use meta-commands starting with backslash (`\`)
+- Use arrow keys for command history
+- Use Tab for auto-completion
+
+```sql
+-- SQL statements
+SELECT * FROM users;
+
+-- Meta-commands
+\dt              -- List tables
+\d users         -- Describe table
+\l               -- List databases
+\c mydb          -- Connect to database
+\q               -- Quit
+```
+
+For a complete list of meta-commands, see the [ysqlsh meta-commands](/api/ysqlsh-meta-commands/) documentation.
+
+## Environment Variables
+
+ysqlsh respects standard PostgreSQL environment variables:
+
+| Variable | Description |
+|----------|-------------|
+| `PGHOST` | Database server host |
+| `PGPORT` | Database server port |
+| `PGDATABASE` | Default database name |
+| `PGUSER` | Default username |
+| `PGPASSWORD` | Default password (not recommended) |
+| `PGPASSFILE` | Path to password file (default: `~/.pgpass`) |
+| `PGSSLMODE` | SSL mode: `disable`, `require`, `verify-ca`, `verify-full` |
+| `PSQL_HISTORY` | Path to history file (default: `~/.psql_history`) |
+| `PSQLRC` | Path to startup file (default: `~/.psqlrc`) |
+
+### Password File
+
+Create `~/.pgpass` with format:
+
+```
+hostname:port:database:username:password
+```
+
+Example:
+```
+localhost:5433:*:yugabyte:mypassword
+192.168.1.100:5433:mydb:myuser:secret
+```
+
+Set permissions:
+```bash
+chmod 600 ~/.pgpass
+```
+
+## Startup File
+
+Create `~/.psqlrc` to run commands on startup:
+
+```sql
+-- Set prompt
+\set PROMPT1 '%n@%M:%> %/ %# '
+
+-- Set output format
+\pset pager off
+\pset null '(null)'
+
+-- Timing
+\timing on
+
+-- Custom variables
+\set HISTSIZE 5000
+```
+
+## Exit Status
+
+ysqlsh returns:
+- `0` - Normal termination
+- `1` - Fatal error (out of memory, file not found)
+- `2` - Connection error (non-interactive session)
+- `3` - Script error with `ON_ERROR_STOP` set
+
+## Examples with Output
+
+### Create and Query Table
+
+```bash
+$ ysqlsh -c "CREATE TABLE employees (id SERIAL, name TEXT, dept TEXT)"
+CREATE TABLE
+
+$ ysqlsh -c "INSERT INTO employees (name, dept) VALUES ('Alice', 'Engineering'), ('Bob', 'Sales')"
+INSERT 0 2
+
+$ ysqlsh -c "SELECT * FROM employees"
+ id | name  |    dept     
+----+-------+-------------
+  1 | Alice | Engineering
+  2 | Bob   | Sales
+(2 rows)
+```
+
+### Export to CSV
+
+```bash
+$ ysqlsh -A -F ',' -t -c "SELECT * FROM employees"
+1,Alice,Engineering
+2,Bob,Sales
+```
+
+### Expanded Output
+
+```bash
+$ ysqlsh -x -c "SELECT * FROM employees WHERE id = 1"
+-[ RECORD 1 ]------
+id   | 1
+name | Alice
+dept | Engineering
+```
+
+## Security Considerations
+
+1. **Avoid PGPASSWORD**: Don't use `PGPASSWORD` environment variable in production. Use `.pgpass` file instead.
+
+2. **SSL Connections**: Use SSL for remote connections:
+   ```bash
+   ysqlsh "postgresql://user@host:5433/db?sslmode=require"
+   ```
+
+3. **Password File Permissions**: Ensure `.pgpass` has mode 0600:
+   ```bash
+   chmod 600 ~/.pgpass
+   ```
+
+4. **Command History**: Sensitive data may be stored in `~/.psql_history`. Clear it if needed:
+   ```bash
+   rm ~/.psql_history
+   ```
+
+## See Also
+
+- [YSQL Meta-Commands](/api/ysqlsh-meta-commands) - Backslash commands for ysqlsh
+- [YSQL API](/api/ysql) - SQL reference for YugabyteDB
+- [yugabyted](/api/cli/yugabyted) - Cluster management tool
+- [ycqlsh](/api/cli/ycqlsh) - YCQL shell

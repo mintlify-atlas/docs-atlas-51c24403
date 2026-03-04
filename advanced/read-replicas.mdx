@@ -1,0 +1,448 @@
+---
+title: 'Read Replicas'
+description: 'Asynchronous timeline-consistent read replicas for geo-distributed low-latency reads in YugabyteDB'
+---
+
+Read replicas in YugabyteDB provide asynchronous replication to observer nodes that don't participate in writes but receive a timeline-consistent copy of data. They enable low-latency reads in remote regions without the write latency penalty of synchronous consensus replication.
+
+## Architecture
+
+Read replicas extend the Raft consensus protocol with observer nodes:
+
+```
+  Primary Cluster (RF=3)              Read Replica Cluster (RF=2)
+  ┌──────────────────┐                ┌──────────────────┐
+  │   us-west-1a     │                │   eu-west-1a     │
+  │   ┌────────┐     │                │   ┌────────┐     │
+  │   │Tablet  │     │                │   │Tablet  │     │
+  │   │Leader  │     │   Async        │   │Observer│     │
+  │   │(R+W)   │─────┼───Replication──┼──►│(R)     │     │
+  │   └────────┘     │                │   └────────┘     │
+  │   ┌────────┐     │                │   ┌────────┐     │
+  │   │Follower│     │                │   │Observer│     │
+  │   │(R+W)   │     │                │   │(R)     │     │
+  │   └────────┘     │                │   └────────┘     │
+  │   ┌────────┐     │                │                  │
+  │   │Follower│     │                └──────────────────┘
+  │   │(R+W)   │     │
+  │   └────────┘     │
+  └──────────────────┘
+       │ Raft Consensus
+       │ Majority: 2/3
+       │ Write Latency: ~50ms
+
+                      │ No voting rights
+                      │ Read Latency: ~5ms (EU users)
+```
+
+### Key Characteristics
+
+- **Observer Nodes**: Don't participate in Raft voting or consensus
+- **Async Replication**: Changes stream asynchronously from primary cluster
+- **Timeline Consistency**: Readers see a consistent snapshot at a point in time
+- **No Write Impact**: Writes don't wait for read replica acknowledgment
+- **Independent RF**: Read replica clusters have their own replication factor (can be even numbers)
+- **Topology Awareness**: Read replicas are aware of universe topology
+
+## Timeline Consistency vs. Eventual Consistency
+
+Read replicas provide **timeline consistency**, which is strictly stronger than eventual consistency:
+
+| Property | Timeline Consistency | Eventual Consistency |
+|----------|---------------------|---------------------|
+| Read View | Consistent snapshot at specific timestamp | May observe out-of-order updates |
+| Time Travel | Application's view never moves backward | View can move backward and forward |
+| Programmability | Predictable, easier to reason about | Complex application logic required |
+| Guarantees | Reads at T see all writes < T | Reads eventually see all writes |
+
+**Example**: With timeline consistency, if you read `balance = 100`, subsequent reads will never see `balance = 80` from an earlier time. With eventual consistency, this regression is possible.
+
+## Replication Factor
+
+Every YugabyteDB universe has:
+- **One primary cluster**: Participates in Raft consensus (typically RF=3, 5, or 7)
+- **Zero or more read replica clusters**: Each with independent RF
+
+### Even Replication Factors
+
+Read replica clusters can use even RFs since they don't participate in consensus:
+
+```yaml
+Universe Configuration:
+  Primary Cluster:
+    Replication Factor: 3
+    Regions: us-west (3 zones)
+  
+  Read Replica Cluster 1:
+    Replication Factor: 2  # Valid for read replicas
+    Regions: eu-west (2 zones)
+  
+  Read Replica Cluster 2:
+    Replication Factor: 1  # Single node per region
+    Regions: ap-south (1 zone)
+```
+
+## Write Handling on Read Replicas
+
+Applications can send write requests to read replica nodes:
+
+```
+  Application (EU)
+       │ write request
+       ▼
+  Read Replica Node (eu-west-1a)
+       │ internally forwards
+       ▼
+  Primary Cluster Leader (us-west-1a)
+       │ Raft consensus
+       ▼
+  Write committed, replicated to followers
+       │ async replication
+       ▼
+  Read Replica Node (updated)
+```
+
+**Process**:
+1. Read replica node receives write request
+2. Internally forwards to primary cluster leader
+3. Primary cluster executes Raft consensus
+4. Write commits in primary cluster
+5. Change asynchronously replicates to read replicas
+
+**Trade-offs**:
+- ✅ Simplified application logic (single connection string)
+- ✅ No need for application-level routing
+- ❌ Higher write latency (cross-region forwarding + consensus)
+- ❌ Best for read-heavy workloads
+
+## Schema Changes
+
+DDL operations are transparently applied to read replicas:
+
+```sql
+-- Execute on primary cluster
+ALTER TABLE users ADD COLUMN phone VARCHAR(20);
+
+-- Automatically applied to read replicas
+-- No separate DDL execution needed
+```
+
+Schema changes are Raft replication-level operations, ensuring read replicas stay synchronized.
+
+## Deployment Scenarios
+
+### Global Reads with Regional Writes
+
+**Use Case**: E-commerce platform with US-based writes, global reads
+
+```yaml
+Architecture:
+  Primary Cluster (us-east, RF=3):
+    - Handles all writes
+    - Serves US reads
+  
+  Read Replica Clusters:
+    - EU (eu-west, RF=2): Serves European users
+    - APAC (ap-southeast, RF=2): Serves Asian users
+    - LATAM (sa-east, RF=1): Serves South American users
+
+Benefits:
+  - Low-latency reads globally (<50ms)
+  - Centralized write consistency
+  - Cost-effective scaling for reads
+```
+
+### Disaster Recovery
+
+**Use Case**: DR site that serves reads during normal operation
+
+```yaml
+Primary Region (us-west):
+  - Production workload (read + write)
+  - RF = 3
+
+DR Region (us-east) - Read Replica:
+  - Serves read traffic during normal operation
+  - RF = 3
+  - Can be promoted to primary during DR event
+
+Failover Process:
+  1. Promote read replica to primary cluster
+  2. Redirect application writes to new primary
+  3. Configure new read replica in us-west (optional)
+```
+
+### Analytics and Reporting
+
+**Use Case**: Offload analytical queries from production
+
+```yaml
+Production Cluster (us-central, RF=3):
+  - OLTP workload
+  - Optimized for low-latency transactions
+
+Analytics Read Replica (us-central, RF=2):
+  - Long-running analytical queries
+  - Separate resource pool
+  - No impact on production workload
+
+Configuration:
+  - Same region for low replication lag
+  - Different instance types (compute-optimized)
+  - Isolation prevents analytics from affecting OLTP
+```
+
+## Setup and Configuration
+
+### Creating Read Replica Cluster
+
+**Using yugabyted**:
+
+```bash
+# Start primary cluster node
+./bin/yugabyted start \
+  --advertise_address=172.151.17.130 \
+  --base_dir=/home/yugabyte/yb-primary-1 \
+  --cloud_location=aws.us-west.us-west-2a
+
+# Start read replica node
+./bin/yugabyted start \
+  --advertise_address=172.151.17.140 \
+  --join=172.151.17.130 \
+  --base_dir=/home/yugabyte/yb-replica-1 \
+  --cloud_location=aws.eu-west.eu-west-1a \
+  --read_replica=true
+```
+
+**Using YugabyteDB Anywhere**:
+
+1. Navigate to universe details
+2. Click "Add Read Replica"
+3. Configure:
+   - Region/zones for read replica
+   - Replication factor
+   - Instance type
+   - Node count
+4. Deploy
+
+### Configuring Connection Pools
+
+Direct read traffic to read replicas:
+
+```python
+# Python example with topology-aware load balancing
+from yugabyte.psycopg2.YBClusterAwareLoadBalancer import \
+    YBClusterAwareLoadBalancer
+
+load_balancer = YBClusterAwareLoadBalancer(
+    topology_keys=[
+        "aws.eu-west.eu-west-1a",  # Prefer EU read replica
+        "aws.us-west.*"             # Fallback to primary
+    ],
+    load_balance=True
+)
+
+conn = psycopg2.connect(
+    host="<universe-host>",
+    port=5433,
+    database="yugabyte",
+    user="yugabyte",
+    password="password",
+    load_balance=True,
+    topology_keys="aws.eu-west.eu-west-1a"
+)
+```
+
+**Using YugabyteDB Smart Drivers**:
+
+```java
+// Java JDBC example
+String jdbcUrl = "jdbc:yugabytedb://host1:5433,host2:5433/yugabyte" +
+    "?load-balance=true" +
+    "&topology-keys=aws.eu-west.eu-west-1a,aws.us-west.*";
+
+Connection conn = DriverManager.getConnection(jdbcUrl, props);
+```
+
+### Application Configuration Patterns
+
+**Separate Connection Pools**:
+
+```javascript
+// Node.js example
+const primaryPool = new Pool({
+  host: 'primary-cluster.example.com',
+  port: 5433,
+  database: 'yugabyte',
+  max: 20
+});
+
+const replicaPool = new Pool({
+  host: 'eu-replica.example.com',
+  port: 5433,
+  database: 'yugabyte',
+  max: 50  // More connections for read-heavy workload
+});
+
+// Route reads to replica
+async function getUser(userId) {
+  const result = await replicaPool.query(
+    'SELECT * FROM users WHERE id = $1',
+    [userId]
+  );
+  return result.rows[0];
+}
+
+// Route writes to primary
+async function updateUser(userId, data) {
+  await primaryPool.query(
+    'UPDATE users SET data = $1 WHERE id = $2',
+    [data, userId]
+  );
+}
+```
+
+## Monitoring Read Replicas
+
+### Replication Lag
+
+```sql
+-- Check async replication lag
+SELECT node_name,
+       node_type,
+       async_replication_committed_lag_micros / 1000000.0 AS lag_seconds
+FROM yb_local_tablets
+WHERE node_type = 'READ_REPLICA'
+ORDER BY lag_seconds DESC;
+```
+
+### Health Metrics
+
+Key metrics to monitor:
+
+| Metric | Description | Threshold |
+|--------|-------------|----------|
+| `async_replication_lag_micros` | Replication delay from primary | < 10s |
+| `async_replication_sent_lag_micros` | Network propagation delay | < 1s |
+| `follower_lag_ms` | Lag within read replica cluster | < 100ms |
+| `handler_latency_yb_tserver_TabletServerService_Read` | Read latency | < 50ms |
+
+### Grafana Dashboard
+
+```yaml
+Panels:
+  - Replication Lag (Time Series):
+      Query: async_replication_committed_lag_micros
+      Alert: lag > 30 seconds
+  
+  - Read Throughput (Gauge):
+      Query: handler_latency_yb_tserver_TabletServerService_Read_count
+  
+  - Read Latency P99 (Graph):
+      Query: histogram_quantile(0.99, 
+               handler_latency_yb_tserver_TabletServerService_Read)
+  
+  - Replica Health (Single Stat):
+      Query: up{job="yb-tserver", read_replica="true"}
+```
+
+## Performance Considerations
+
+### Read Latency
+
+Expected latencies:
+- **Same region**: 5-20ms (network + query execution)
+- **Cross-region**: 20-100ms (depends on geographic distance)
+- **Cross-continent**: 100-300ms
+
+### Replication Lag
+
+Factors affecting lag:
+- **Network bandwidth**: Higher throughput reduces lag
+- **Write rate**: Sustained writes can increase lag
+- **Tablet splits**: Temporary lag spike during split operations
+- **Compactions**: Background operations may affect lag
+
+### Scaling Reads
+
+Increase read capacity by:
+1. **Adding more read replica nodes** in existing cluster
+2. **Creating additional read replica clusters** in new regions
+3. **Increasing RF** of read replica cluster
+
+```bash
+# Add nodes to read replica cluster
+yugabyted start --read_replica=true --join=<existing-node> ...
+
+# Each node added increases read capacity
+# No impact on write performance
+```
+
+## Failover and Promotion
+
+### Promoting Read Replica to Primary
+
+**Scenario**: Primary region failure, promote DR read replica
+
+```bash
+# Step 1: Promote read replica to full RAFT participant
+yb-admin -master_addresses <master-addresses> \
+  modify_placement_info \
+    aws.us-east.us-east-1a,aws.us-east.us-east-1b,aws.us-east.us-east-1c 3
+
+# Step 2: Update application connection strings
+# Point to newly promoted primary cluster
+
+# Step 3: (Optional) Create new read replica in different region
+```
+
+**Post-Promotion**:
+- Former read replica now participates in consensus
+- Write latency determined by new primary region
+- Can create new read replicas as needed
+
+## Best Practices
+
+1. **Right-Size Read Replica Clusters**:
+   - Match RF to availability requirements
+   - Use smaller RFs (1-2) for cost optimization
+   - Consider read workload patterns
+
+2. **Monitor Replication Lag**:
+   - Alert on lag > 10 seconds
+   - Investigate sustained lag immediately
+   - Correlate with write throughput
+
+3. **Application Design**:
+   - Use separate connection pools for reads/writes
+   - Leverage smart drivers for topology awareness
+   - Handle stale reads gracefully in application logic
+
+4. **Geographic Distribution**:
+   - Place read replicas close to user populations
+   - Consider data residency requirements
+   - Balance cost vs. latency for region selection
+
+5. **Resource Allocation**:
+   - Read replicas can use different instance types
+   - Optimize for read workload (more CPU, less storage IOPS)
+   - Monitor and adjust based on actual usage
+
+6. **Testing**:
+   - Regularly test failover procedures
+   - Verify application behavior with stale reads
+   - Load test read replica clusters independently
+
+## Limitations
+
+- **Write Latency**: Writes forwarded from read replicas incur cross-region penalty
+- **Replication Lag**: Reads may be slightly stale (typically < 1 second)
+- **No Strong Consistency**: Read replicas don't provide read-your-writes for cross-region writes
+- **Schema Changes**: DDL operations propagate asynchronously
+
+## Learn More
+
+- [Read Replica Architecture](/architecture/docdb-replication/read-replicas)
+- [Setting Up Read Replicas (YSQL)](/explore/multi-region-deployments/read-replicas-ysql)
+- [Setting Up Read Replicas (YCQL)](/explore/multi-region-deployments/read-replicas-ycql)
+- [Smart Drivers Documentation](/drivers-orms/smart-drivers)

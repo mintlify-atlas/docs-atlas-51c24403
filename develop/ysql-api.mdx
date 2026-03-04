@@ -1,0 +1,562 @@
+---
+title: YSQL API Reference
+description: PostgreSQL-compatible distributed SQL API
+icon: 'database'
+---
+
+Yugabyte Structured Query Language (YSQL) is a fully-relational, ANSI SQL-compliant API that is best fit for scale-out RDBMS applications requiring ultra resilience, massive write scalability, and geographic data distribution.
+
+## Overview
+
+YSQL is built on top of the PostgreSQL query layer (version 15.2) and is **fully compatible with PostgreSQL by construction**. This means:
+
+- SQL syntax and semantics match PostgreSQL
+- Existing PostgreSQL applications work with minimal changes
+- PostgreSQL tools and drivers are compatible
+- Most PostgreSQL extensions are supported
+
+<Tip>
+YSQL extends PostgreSQL with distributed database capabilities while maintaining wire-protocol compatibility.
+</Tip>
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Distributed SQL" icon="network-wired">
+    Horizontally scalable SQL with automatic sharding and replication
+  </Card>
+  <Card title="ACID Transactions" icon="shield-check">
+    Distributed transactions with strong consistency guarantees
+  </Card>
+  <Card title="PostgreSQL Compatible" icon="database">
+    Full compatibility with PostgreSQL syntax and semantics
+  </Card>
+  <Card title="Geo-Distribution" icon="globe">
+    Built-in support for multi-region deployments
+  </Card>
+</CardGroup>
+
+## API Components
+
+YSQL includes comprehensive SQL support:
+
+### Data Definition Language (DDL)
+
+Create and modify database objects:
+
+```sql
+-- Create a database
+CREATE DATABASE myapp;
+
+-- Create a table with primary key
+CREATE TABLE users (
+    id SERIAL PRIMARY KEY,
+    username TEXT NOT NULL UNIQUE,
+    email TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Create an index
+CREATE INDEX idx_users_email ON users(email);
+
+-- Add a foreign key constraint
+CREATE TABLE orders (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id),
+    total DECIMAL(10, 2),
+    created_at TIMESTAMP DEFAULT NOW()
+);
+```
+
+### Data Manipulation Language (DML)
+
+Query and modify data:
+
+<CodeGroup>
+```sql INSERT
+-- Insert single row
+INSERT INTO users (username, email) 
+VALUES ('john_doe', 'john@example.com');
+
+-- Insert multiple rows
+INSERT INTO users (username, email) VALUES
+    ('jane_smith', 'jane@example.com'),
+    ('bob_jones', 'bob@example.com');
+
+-- Insert with RETURNING clause
+INSERT INTO users (username, email) 
+VALUES ('alice', 'alice@example.com')
+RETURNING id, created_at;
+```
+
+```sql SELECT
+-- Simple query
+SELECT * FROM users WHERE username = 'john_doe';
+
+-- Join tables
+SELECT u.username, o.total 
+FROM users u
+INNER JOIN orders o ON u.id = o.user_id
+WHERE o.created_at > NOW() - INTERVAL '30 days';
+
+-- Aggregate functions
+SELECT user_id, COUNT(*) as order_count, SUM(total) as total_spent
+FROM orders
+GROUP BY user_id
+HAVING SUM(total) > 1000;
+```
+
+```sql UPDATE
+-- Update single row
+UPDATE users 
+SET email = 'newemail@example.com' 
+WHERE username = 'john_doe';
+
+-- Update with RETURNING
+UPDATE users 
+SET email = 'updated@example.com' 
+WHERE id = 1
+RETURNING *;
+```
+
+```sql DELETE
+-- Delete specific rows
+DELETE FROM orders 
+WHERE created_at < NOW() - INTERVAL '1 year';
+
+-- Delete with subquery
+DELETE FROM orders 
+WHERE user_id IN (
+    SELECT id FROM users WHERE created_at < '2020-01-01'
+);
+```
+</CodeGroup>
+
+### Transactions
+
+YSQL supports distributed ACID transactions:
+
+```sql
+BEGIN;
+
+-- Deduct from account
+UPDATE accounts SET balance = balance - 100 WHERE id = 1;
+
+-- Add to another account
+UPDATE accounts SET balance = balance + 100 WHERE id = 2;
+
+-- Record the transfer
+INSERT INTO transfers (from_account, to_account, amount) 
+VALUES (1, 2, 100);
+
+COMMIT;
+```
+
+**Transaction Isolation Levels:**
+- `READ COMMITTED` (default)
+- `REPEATABLE READ`
+- `SERIALIZABLE`
+
+```sql
+-- Set transaction isolation level
+SET TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+```
+
+### Data Types
+
+YSQL supports all PostgreSQL data types:
+
+<AccordionGroup>
+  <Accordion title="Numeric Types">
+    - `INTEGER`, `BIGINT`, `SMALLINT`
+    - `DECIMAL`, `NUMERIC`
+    - `REAL`, `DOUBLE PRECISION`
+    - `SERIAL`, `BIGSERIAL`
+    
+    ```sql
+    CREATE TABLE products (
+        id SERIAL PRIMARY KEY,
+        price DECIMAL(10, 2),
+        quantity INTEGER,
+        weight REAL
+    );
+    ```
+  </Accordion>
+
+  <Accordion title="String Types">
+    - `TEXT`
+    - `VARCHAR(n)`, `CHAR(n)`
+    - `BYTEA` (binary data)
+    
+    ```sql
+    CREATE TABLE documents (
+        id SERIAL PRIMARY KEY,
+        title VARCHAR(255),
+        content TEXT,
+        metadata BYTEA
+    );
+    ```
+  </Accordion>
+
+  <Accordion title="Date/Time Types">
+    - `DATE`
+    - `TIME`, `TIME WITH TIME ZONE`
+    - `TIMESTAMP`, `TIMESTAMP WITH TIME ZONE`
+    - `INTERVAL`
+    
+    ```sql
+    CREATE TABLE events (
+        id SERIAL PRIMARY KEY,
+        event_date DATE,
+        event_time TIME,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    );
+    ```
+  </Accordion>
+
+  <Accordion title="JSON Types">
+    - `JSON`
+    - `JSONB` (binary JSON, recommended)
+    
+    ```sql
+    CREATE TABLE user_profiles (
+        user_id INTEGER PRIMARY KEY,
+        preferences JSONB,
+        metadata JSON
+    );
+    
+    -- Query JSON data
+    SELECT preferences->>'theme' as theme 
+    FROM user_profiles 
+    WHERE preferences->>'notifications' = 'enabled';
+    ```
+  </Accordion>
+
+  <Accordion title="Array Types">
+    ```sql
+    CREATE TABLE articles (
+        id SERIAL PRIMARY KEY,
+        tags TEXT[],
+        ratings INTEGER[]
+    );
+    
+    -- Insert array data
+    INSERT INTO articles (tags, ratings) 
+    VALUES ('{postgresql, database, sql}', '{5, 4, 5}');
+    
+    -- Query arrays
+    SELECT * FROM articles WHERE 'postgresql' = ANY(tags);
+    ```
+  </Accordion>
+
+  <Accordion title="UUID Type">
+    ```sql
+    CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+    
+    CREATE TABLE sessions (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        user_id INTEGER,
+        created_at TIMESTAMP DEFAULT NOW()
+    );
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### Indexes
+
+YSQL supports various index types for query optimization:
+
+<CodeGroup>
+```sql B-Tree Index (Default)
+-- Standard index
+CREATE INDEX idx_users_username ON users(username);
+
+-- Composite index
+CREATE INDEX idx_orders_user_date ON orders(user_id, created_at);
+
+-- Unique index
+CREATE UNIQUE INDEX idx_users_email ON users(email);
+```
+
+```sql Partial Index
+-- Index only active users
+CREATE INDEX idx_active_users 
+ON users(username) 
+WHERE status = 'active';
+
+-- Index recent orders
+CREATE INDEX idx_recent_orders 
+ON orders(created_at) 
+WHERE created_at > NOW() - INTERVAL '30 days';
+```
+
+```sql Covering Index
+-- Include additional columns
+CREATE INDEX idx_users_username_covering 
+ON users(username) 
+INCLUDE (email, created_at);
+```
+
+```sql Expression Index
+-- Index on expression
+CREATE INDEX idx_users_lower_email 
+ON users(LOWER(email));
+
+-- Query using expression index
+SELECT * FROM users WHERE LOWER(email) = 'john@example.com';
+```
+</CodeGroup>
+
+### Advanced Features
+
+#### Stored Procedures and Functions
+
+```sql
+-- Create a function
+CREATE OR REPLACE FUNCTION get_user_order_count(user_id INTEGER)
+RETURNS INTEGER AS $$
+DECLARE
+    count INTEGER;
+BEGIN
+    SELECT COUNT(*) INTO count FROM orders WHERE orders.user_id = user_id;
+    RETURN count;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Use the function
+SELECT username, get_user_order_count(id) as order_count
+FROM users;
+```
+
+#### Triggers
+
+```sql
+-- Create trigger function
+CREATE OR REPLACE FUNCTION update_modified_timestamp()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Create trigger
+CREATE TRIGGER trigger_update_user_timestamp
+BEFORE UPDATE ON users
+FOR EACH ROW
+EXECUTE FUNCTION update_modified_timestamp();
+```
+
+#### Views
+
+```sql
+-- Create a view
+CREATE VIEW user_order_summary AS
+SELECT 
+    u.id,
+    u.username,
+    COUNT(o.id) as total_orders,
+    COALESCE(SUM(o.total), 0) as total_spent
+FROM users u
+LEFT JOIN orders o ON u.id = o.user_id
+GROUP BY u.id, u.username;
+
+-- Query the view
+SELECT * FROM user_order_summary WHERE total_orders > 5;
+```
+
+#### Common Table Expressions (CTEs)
+
+```sql
+WITH monthly_sales AS (
+    SELECT 
+        DATE_TRUNC('month', created_at) as month,
+        SUM(total) as sales
+    FROM orders
+    GROUP BY DATE_TRUNC('month', created_at)
+)
+SELECT 
+    month,
+    sales,
+    LAG(sales) OVER (ORDER BY month) as previous_month_sales
+FROM monthly_sales
+ORDER BY month;
+```
+
+## YugabyteDB-Specific Extensions
+
+### Tablegroups and Colocation
+
+Optimize small tables for better performance:
+
+```sql
+-- Create a colocated database
+CREATE DATABASE myapp WITH COLOCATION = true;
+
+-- Create colocated table
+CREATE TABLE small_reference_table (
+    id SERIAL PRIMARY KEY,
+    name TEXT
+) WITH (COLOCATION = true);
+```
+
+### Tablespaces for Geo-Distribution
+
+```sql
+-- Create tablespace for specific region
+CREATE TABLESPACE us_west_tablespace 
+WITH (replica_placement='{"num_replicas": 3, "placement_blocks": [{"cloud": "aws", "region": "us-west-2", "zone": "us-west-2a", "min_num_replicas": 1}]}');
+
+-- Create table in tablespace
+CREATE TABLE west_coast_users (
+    id SERIAL PRIMARY KEY,
+    username TEXT
+) TABLESPACE us_west_tablespace;
+```
+
+### Row-Level Geo-Partitioning
+
+```sql
+CREATE TABLE global_users (
+    user_id INTEGER,
+    geo VARCHAR(10),
+    username TEXT,
+    PRIMARY KEY (user_id HASH, geo)
+) PARTITION BY LIST (geo);
+
+CREATE TABLE users_us PARTITION OF global_users 
+    FOR VALUES IN ('US') TABLESPACE us_tablespace;
+    
+CREATE TABLE users_eu PARTITION OF global_users 
+    FOR VALUES IN ('EU') TABLESPACE eu_tablespace;
+```
+
+## PostgreSQL Compatibility
+
+YSQL supports PostgreSQL version 15.2 features:
+
+<Check>Fully Supported</Check>
+- All PostgreSQL data types
+- Joins (INNER, LEFT, RIGHT, FULL, CROSS)
+- Subqueries and CTEs
+- Window functions
+- Triggers and stored procedures
+- Foreign keys and constraints
+- Sequences
+- Extensions (pgvector, PostGIS, etc.)
+
+<Warning>Limited Support</Warning>
+- Some PostgreSQL-specific administration commands
+- Certain replication-specific features
+
+## Query Examples
+
+### Complex Queries
+
+```sql
+-- Window functions
+SELECT 
+    username,
+    created_at,
+    ROW_NUMBER() OVER (ORDER BY created_at) as user_number,
+    DENSE_RANK() OVER (ORDER BY DATE(created_at)) as day_rank
+FROM users;
+
+-- Recursive CTE
+WITH RECURSIVE subordinates AS (
+    SELECT employee_id, manager_id, name
+    FROM employees
+    WHERE manager_id IS NULL
+    
+    UNION ALL
+    
+    SELECT e.employee_id, e.manager_id, e.name
+    FROM employees e
+    INNER JOIN subordinates s ON s.employee_id = e.manager_id
+)
+SELECT * FROM subordinates;
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Use Primary Keys Wisely">
+    Choose primary keys that distribute data evenly:
+    
+    ```sql
+    -- Good: HASH partitioning for even distribution
+    CREATE TABLE users (
+        id INTEGER PRIMARY KEY
+    ) SPLIT INTO 16 TABLETS;
+    
+    -- For sequential IDs, use HASH
+    CREATE TABLE orders (
+        id SERIAL,
+        PRIMARY KEY (id HASH)
+    );
+    ```
+  </Accordion>
+
+  <Accordion title="Leverage Indexes">
+    Create indexes for frequently queried columns:
+    
+    - Use covering indexes to avoid table lookups
+    - Create partial indexes for filtered queries
+    - Monitor index usage with EXPLAIN
+  </Accordion>
+
+  <Accordion title="Optimize Transactions">
+    - Keep transactions short
+    - Use appropriate isolation levels
+    - Leverage RETURNING clause for single-statement transactions
+    
+    ```sql
+    -- Single statement with RETURNING
+    UPDATE accounts SET balance = balance - 100 
+    WHERE id = 1 
+    RETURNING balance;
+    ```
+  </Accordion>
+
+  <Accordion title="Use Prepared Statements">
+    Prepared statements improve performance and security:
+    
+    ```sql
+    PREPARE get_user AS 
+        SELECT * FROM users WHERE id = $1;
+    
+    EXECUTE get_user(123);
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Connection Information
+
+**Default Connection Parameters:**
+- Host: `localhost`
+- Port: `5433`
+- Database: `yugabyte`
+- User: `yugabyte`
+- Password: `yugabyte`
+
+**Connection String:**
+```
+postgresql://yugabyte:yugabyte@localhost:5433/yugabyte
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Build Apps" icon="code" href="/develop/build-apps">
+    Start building applications with YSQL
+  </Card>
+  <Card title="Drivers" icon="plug" href="/develop/drivers-orms">
+    Choose your driver or ORM
+  </Card>
+  <Card title="Best Practices" icon="star" href="/develop/best-practices">
+    Learn YSQL best practices
+  </Card>
+  <Card title="Full API Docs" icon="book" href="https://docs.yugabyte.com/stable/api/ysql/">
+    Complete YSQL API reference
+  </Card>
+</CardGroup>

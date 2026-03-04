@@ -1,0 +1,683 @@
+---
+title: 'pgvector: Vector Similarity Search'
+description: 'High-performance vector indexing and similarity search for AI/ML applications using pgvector in YugabyteDB'
+---
+
+The pgvector extension in YugabyteDB enables storing and querying high-dimensional vector embeddings for similarity search use cases like RAG (Retrieval-Augmented Generation), recommendation systems, image search, and semantic search applications.
+
+## Architecture: Vector LSM
+
+YugabyteDB implements a custom **Vector LSM** (Log-Structured Merge tree) storage subsystem optimized for vector data, integrating state-of-the-art vector indexing libraries at the storage layer:
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                  YSQL Query Layer                       │
+│              (pgvector SQL Interface)                   │
+└────────────────┬────────────────────────────────────────┘
+                 │
+        ┌────────▼─────────┐
+        │   DocDB Layer    │
+        │  ┌────────────┐  │
+        │  │  RocksDB   │  │  Primary table data
+        │  │  (KV data) │  │  + vector_id mappings
+        │  └────────────┘  │
+        │  ┌────────────┐  │
+        │  │ Vector LSM │  │  Vector indexes
+        │  │ ┌────────┐ │  │
+        │  │ │ In-Mem │ │  │  Mutable index
+        │  │ │ Buffer │ │  │  (new vectors)
+        │  │ └────────┘ │  │
+        │  │ ┌────────┐ │  │  Immutable indexes
+        │  │ │ On-Disk│ │  │  (HNSW via usearch/
+        │  │ │ Indexes│ │  │   hnswlib)
+        │  │ └────────┘ │  │
+        │  └────────────┘  │
+        └──────────────────┘
+                 │
+        Raft Replication
+                 │
+        ┌────────▼─────────┐
+        │  Tablet Replicas │
+        └──────────────────┘
+```
+
+### Key Components
+
+1. **Vector LSM Subsystem**:
+   - Maintains multiple vector indexes (mutable + immutable)
+   - Uses Usearch and Hnswlib for HNSW graph construction
+   - Persists indexes as memory-mapped files
+   - Performs compactions to merge indexes and remove deleted vectors
+
+2. **Vector ID Mapping**:
+   - Each vector assigned a unique UUID (vector_id)
+   - Bidirectional mapping stored in RocksDB:
+     - `vector_id → ybctid` (primary key of indexed row)
+     - `ybctid → vector_id` (embedded in vector column)
+
+3. **MVCC Filtering**:
+   - Vector search results filtered by hybrid timestamp
+   - Post-filtering removes deleted/overwritten vectors
+   - Predicate pushdown optimizes search performance
+
+4. **Copartitioning**:
+   - Vector indexes stored in same tablet as indexed table
+   - Enables single-RPC queries (search + fetch other columns)
+   - Sharded and replicated with the main table
+
+## Distance Functions
+
+YugabyteDB supports three vector distance metrics:
+
+| Function | Operator | Description | Use Cases |
+|----------|----------|-------------|----------|
+| **L2 (Euclidean)** | `<->` | Straight-line distance in vector space | Image recognition, spatial data |
+| **Inner Product** | `<#>` | Dot product (returns negative value) | Ranking, recommendation models |
+| **Cosine Distance** | `<=>` | Angle between vectors (direction, not magnitude) | Text similarity, semantic search |
+
+### Formula Reference
+
+```python
+# L2 Distance (Euclidean)
+distance = sqrt(sum((a[i] - b[i])^2 for i in range(n)))
+
+# Inner Product (returns negative for ASC index scan)
+distance = -sum(a[i] * b[i] for i in range(n))
+
+# Cosine Distance
+distance = 1 - (dot(a, b) / (norm(a) * norm(b)))
+```
+
+## Basic Usage
+
+### Installation
+
+```sql
+CREATE EXTENSION vector;
+```
+
+### Creating Vector Columns
+
+```sql
+-- Simple vector column (3 dimensions)
+CREATE TABLE items (
+  id BIGSERIAL PRIMARY KEY,
+  embedding VECTOR(3)
+);
+
+-- RAG application schema (1536-dim embeddings)
+CREATE TABLE documents (
+  id BIGSERIAL PRIMARY KEY,
+  document_content TEXT,
+  embedding VECTOR(1536),  -- OpenAI ada-002 dimension
+  metadata JSONB
+);
+
+-- Add vector column to existing table
+ALTER TABLE products ADD COLUMN embedding VECTOR(512);
+```
+
+### Inserting Vectors
+
+```sql
+-- Insert vector literals
+INSERT INTO items (embedding) 
+VALUES ('[1,2,3]'), ('[4,5,6]');
+
+-- Insert from application (Python example)
+import psycopg2
+import numpy as np
+
+conn = psycopg2.connect("host=localhost dbname=yugabyte")
+cur = conn.cursor()
+
+# Generate embedding (e.g., from OpenAI)
+vector = np.random.rand(1536).tolist()
+cur.execute(
+    "INSERT INTO documents (document_content, embedding) VALUES (%s, %s)",
+    ("Sample document", vector)
+)
+conn.commit()
+
+-- Upsert
+INSERT INTO items (id, embedding) 
+VALUES (1, '[1,2,3]'), (2, '[4,5,6]')
+ON CONFLICT (id) DO UPDATE SET embedding = EXCLUDED.embedding;
+```
+
+### Querying Vectors
+
+```sql
+-- Nearest neighbors by L2 distance
+SELECT id, document_content, embedding <-> '[0.1, 0.2, ...]' AS distance
+FROM documents
+ORDER BY embedding <-> '[0.1, 0.2, ...]'
+LIMIT 10;
+
+-- Nearest neighbors to existing row
+SELECT t.id, t.embedding <-> q.embedding AS distance
+FROM items t
+CROSS JOIN (SELECT embedding FROM items WHERE id = 1) q
+WHERE t.id != 1
+ORDER BY t.embedding <-> q.embedding
+LIMIT 5;
+
+-- Filter by distance threshold
+SELECT id, document_content
+FROM documents
+WHERE embedding <-> '[0.1, 0.2, ...]' < 0.5
+ORDER BY embedding <-> '[0.1, 0.2, ...]'
+LIMIT 10;
+
+-- Cosine similarity (text search)
+SELECT id, 
+       1 - (embedding <=> '[0.1, 0.2, ...]') AS cosine_similarity
+FROM documents
+ORDER BY embedding <=> '[0.1, 0.2, ...]'
+LIMIT 10;
+```
+
+## Vector Indexing (HNSW)
+
+HNSW (Hierarchical Navigable Small World) creates a multi-layer graph structure for efficient approximate nearest neighbor search.
+
+### Creating HNSW Indexes
+
+```sql
+-- L2 distance index
+CREATE INDEX NONCONCURRENTLY ON documents 
+  USING ybhnsw (embedding vector_l2_ops);
+
+-- Inner product index
+CREATE INDEX NONCONCURRENTLY ON documents 
+  USING ybhnsw (embedding vector_ip_ops);
+
+-- Cosine distance index  
+CREATE INDEX NONCONCURRENTLY ON documents 
+  USING ybhnsw (embedding vector_cosine_ops);
+
+-- Index with custom parameters
+CREATE INDEX NONCONCURRENTLY ON documents 
+  USING ybhnsw (embedding vector_l2_ops)
+  WITH (m = 16, ef_construction = 128);
+```
+
+**Important**: 
+- Use `NONCONCURRENTLY` to avoid blocking writes during index build
+- Create separate indexes for each distance function you need
+- Index creation can take significant time for large datasets
+
+### HNSW Parameters
+
+| Parameter | Description | Default | Tuning |
+|-----------|-------------|---------|--------|
+| `m` | Max connections per layer in HNSW graph | 16 | Higher = better recall, more memory |
+| `ef_construction` | Size of dynamic candidate list during build | 64 | Higher = better index quality, slower build |
+
+**Query-time parameters** (set per query):
+
+```sql
+-- Increase search quality (slower, better recall)
+SET hnsw.ef_search = 200;  -- Default: 40
+
+SELECT * FROM documents
+ORDER BY embedding <-> '[...]'
+LIMIT 10;
+```
+
+### Index Performance Tuning
+
+```sql
+-- High-accuracy index (slower build, best recall)
+CREATE INDEX NONCONCURRENTLY ON documents 
+  USING ybhnsw (embedding vector_l2_ops)
+  WITH (m = 32, ef_construction = 256);
+
+-- Balanced index (recommended for most use cases)
+CREATE INDEX NONCONCURRENTLY ON documents 
+  USING ybhnsw (embedding vector_l2_ops)
+  WITH (m = 16, ef_construction = 128);
+
+-- Fast build index (lower recall)
+CREATE INDEX NONCONCURRENTLY ON documents 
+  USING ybhnsw (embedding vector_l2_ops)
+  WITH (m = 8, ef_construction = 64);
+```
+
+## Advanced Usage
+
+### RAG Application Pattern
+
+```sql
+-- Schema for RAG system
+CREATE TABLE knowledge_base (
+  id BIGSERIAL PRIMARY KEY,
+  source_document VARCHAR(255),
+  chunk_text TEXT,
+  chunk_index INTEGER,
+  embedding VECTOR(1536),
+  metadata JSONB,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX NONCONCURRENTLY ON knowledge_base 
+  USING ybhnsw (embedding vector_cosine_ops)
+  WITH (m = 16, ef_construction = 128);
+
+-- Hybrid search: vector similarity + metadata filter
+SELECT 
+  id,
+  chunk_text,
+  source_document,
+  1 - (embedding <=> $1) AS similarity
+FROM knowledge_base
+WHERE 
+  metadata->>'category' = 'technical_docs'
+  AND created_at > NOW() - INTERVAL '30 days'
+ORDER BY embedding <=> $1
+LIMIT 5;
+```
+
+### Multimodal Search
+
+```sql
+-- Store multiple embedding types
+CREATE TABLE media (
+  id BIGSERIAL PRIMARY KEY,
+  title TEXT,
+  image_url TEXT,
+  text_embedding VECTOR(768),   -- BERT embeddings
+  image_embedding VECTOR(2048), -- ResNet embeddings
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX ON media USING ybhnsw (text_embedding vector_cosine_ops);
+CREATE INDEX ON media USING ybhnsw (image_embedding vector_cosine_ops);
+
+-- Text-to-image search
+SELECT id, title, image_url
+FROM media
+ORDER BY text_embedding <=> $1  -- Query text embedding
+LIMIT 10;
+
+-- Image-to-image search
+SELECT id, title
+FROM media  
+ORDER BY image_embedding <-> $1  -- Query image embedding
+LIMIT 10;
+```
+
+### Aggregation Operations
+
+```sql
+-- Average embeddings by category
+SELECT 
+  metadata->>'category' AS category,
+  AVG(embedding) AS centroid_embedding
+FROM documents
+GROUP BY metadata->>'category';
+
+-- Find representative documents (closest to centroid)
+WITH category_centroids AS (
+  SELECT 
+    metadata->>'category' AS category,
+    AVG(embedding) AS centroid
+  FROM documents
+  GROUP BY metadata->>'category'
+)
+SELECT DISTINCT ON (c.category)
+  c.category,
+  d.id,
+  d.document_content,
+  d.embedding <-> c.centroid AS distance_to_centroid
+FROM category_centroids c
+JOIN documents d ON d.metadata->>'category' = c.category
+ORDER BY c.category, d.embedding <-> c.centroid
+LIMIT 1;
+```
+
+### Batch Vector Operations
+
+```python
+# Python example: Bulk insert with pgvector
+import psycopg2
+from pgvector.psycopg2 import register_vector
+import numpy as np
+
+conn = psycopg2.connect("host=localhost dbname=yugabyte")
+register_vector(conn)
+
+# Generate batch of embeddings
+vectors = [np.random.rand(1536).tolist() for _ in range(1000)]
+documents = [(f"doc_{i}", vec) for i, vec in enumerate(vectors)]
+
+# Batch insert
+cur = conn.cursor()
+cur.executemany(
+    "INSERT INTO documents (document_content, embedding) VALUES (%s, %s)",
+    documents
+)
+conn.commit()
+
+# Batch similarity search
+query_vectors = [np.random.rand(1536).tolist() for _ in range(10)]
+
+for query_vec in query_vectors:
+    cur.execute(
+        "SELECT id, embedding <-> %s AS distance "
+        "FROM documents ORDER BY distance LIMIT 5",
+        (query_vec,)
+    )
+    results = cur.fetchall()
+    print(f"Top 5 results: {results}")
+```
+
+## MVCC and Transactional Behavior
+
+Vector LSM respects YugabyteDB's MVCC (Multi-Version Concurrency Control):
+
+### Read-Your-Writes
+
+```sql
+BEGIN;
+  INSERT INTO documents (document_content, embedding)
+  VALUES ('New document', '[0.1, 0.2, ...]');
+  
+  -- Immediately visible in same transaction
+  SELECT COUNT(*) FROM documents
+  WHERE embedding <-> '[0.1, 0.2, ...]' < 0.5;
+COMMIT;
+```
+
+### Snapshot Isolation
+
+```sql
+-- Transaction 1
+BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+  SELECT * FROM documents
+  ORDER BY embedding <-> '[...]'
+  LIMIT 10;
+  -- Results remain consistent even if concurrent updates occur
+  
+  -- Later in same transaction
+  SELECT * FROM documents
+  ORDER BY embedding <-> '[...]'
+  LIMIT 10;
+  -- Returns same snapshot
+COMMIT;
+```
+
+### Handling Deletes and Updates
+
+Vector LSM filters out deleted/overwritten vectors:
+
+```sql
+-- Update vector (generates new vector_id internally)
+UPDATE documents 
+SET embedding = '[1,2,3]'
+WHERE id = 123;
+
+-- Delete
+DELETE FROM documents WHERE id = 456;
+
+-- Subsequent searches automatically exclude deleted vectors
+SELECT * FROM documents
+ORDER BY embedding <-> '[...]'
+LIMIT 10;
+-- Old vector_id (from deleted/updated row) filtered out via MVCC
+```
+
+## Performance Optimization
+
+### Index Build Time
+
+Factors affecting build time:
+- Number of vectors
+- Vector dimensionality  
+- HNSW parameters (m, ef_construction)
+- Available memory
+
+```bash
+# Monitor index build progress
+SELECT schemaname, tablename, indexname, 
+       pg_size_pretty(pg_relation_size(indexrelid)) AS index_size
+FROM pg_stat_user_indexes
+WHERE indexname LIKE '%embedding%';
+```
+
+### Query Performance
+
+Optimizations:
+
+1. **Increase ef_search for better recall**:
+```sql
+SET hnsw.ef_search = 100;
+```
+
+2. **Use LIMIT to reduce result set**:
+```sql
+-- Faster: Only compute top 10
+SELECT * FROM documents
+ORDER BY embedding <-> '[...]'
+LIMIT 10;
+
+-- Slower: Full table scan then limit
+SELECT * FROM (
+  SELECT *, embedding <-> '[...]' AS dist FROM documents
+) WHERE dist < 0.5;
+```
+
+3. **Partition large tables**:
+```sql
+CREATE TABLE documents (
+  id BIGSERIAL,
+  created_at DATE,
+  embedding VECTOR(1536),
+  PRIMARY KEY (id, created_at)
+) PARTITION BY RANGE (created_at);
+
+CREATE TABLE documents_2024_q1 PARTITION OF documents
+  FOR VALUES FROM ('2024-01-01') TO ('2024-04-01');
+
+-- Create index on each partition
+CREATE INDEX ON documents_2024_q1 
+  USING ybhnsw (embedding vector_l2_ops);
+```
+
+### Memory Management
+
+Vector LSM uses memory-mapped files for on-disk indexes:
+
+```bash
+# Monitor memory usage
+SELECT 
+  pg_size_pretty(sum(pg_relation_size(indexrelid))) AS total_index_size
+FROM pg_stat_user_indexes
+WHERE indexname LIKE '%ybhnsw%';
+```
+
+**Best practices**:
+- Provision sufficient memory for active indexes
+- Monitor page cache hit rate
+- Use SSD storage for vector indexes
+
+## Integration Examples
+
+### OpenAI Embeddings
+
+```python
+import openai
+import psycopg2
+from pgvector.psycopg2 import register_vector
+
+openai.api_key = "your-api-key"
+conn = psycopg2.connect("host=localhost dbname=yugabyte")
+register_vector(conn)
+
+def embed_and_store(text: str, doc_id: int):
+    # Generate embedding
+    response = openai.Embedding.create(
+        input=text,
+        model="text-embedding-ada-002"
+    )
+    embedding = response['data'][0]['embedding']
+    
+    # Store in YugabyteDB
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE documents SET embedding = %s WHERE id = %s",
+        (embedding, doc_id)
+    )
+    conn.commit()
+
+def semantic_search(query: str, limit: int = 10):
+    # Embed query
+    response = openai.Embedding.create(
+        input=query,
+        model="text-embedding-ada-002"
+    )
+    query_embedding = response['data'][0]['embedding']
+    
+    # Search
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, document_content, "
+        "1 - (embedding <=> %s) AS similarity "
+        "FROM documents "
+        "ORDER BY embedding <=> %s "
+        "LIMIT %s",
+        (query_embedding, query_embedding, limit)
+    )
+    return cur.fetchall()
+```
+
+### LangChain Integration
+
+```python
+from langchain.vectorstores.yugabytedb import YugabyteDB
+from langchain.embeddings import OpenAIEmbeddings
+from langchain.document_loaders import TextLoader
+from langchain.text_splitter import CharacterTextSplitter
+
+# Load and split documents
+loader = TextLoader('document.txt')
+documents = loader.load()
+text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=0)
+texts = text_splitter.split_documents(documents)
+
+# Create vector store
+embeddings = OpenAIEmbeddings()
+vectorstore = YugabyteDB.from_documents(
+    texts,
+    embeddings,
+    connection_string="postgresql://yugabyte@localhost:5433/yugabyte",
+    table_name="langchain_docs",
+    distance_strategy="cosine"
+)
+
+# Similarity search
+query = "What is YugabyteDB?"
+docs = vectorstore.similarity_search(query, k=5)
+for doc in docs:
+    print(doc.page_content)
+```
+
+## Monitoring and Troubleshooting
+
+### Index Statistics
+
+```sql
+-- Index size and usage
+SELECT 
+  schemaname,
+  tablename,
+  indexname,
+  idx_scan AS index_scans,
+  pg_size_pretty(pg_relation_size(indexrelid)) AS index_size
+FROM pg_stat_user_indexes
+WHERE indexname LIKE '%ybhnsw%'
+ORDER BY idx_scan DESC;
+
+-- Unused indexes
+SELECT indexname
+FROM pg_stat_user_indexes
+WHERE idx_scan = 0 AND indexname LIKE '%ybhnsw%';
+```
+
+### Query Performance Analysis
+
+```sql
+-- Explain vector query
+EXPLAIN (ANALYZE, BUFFERS) 
+SELECT * FROM documents
+ORDER BY embedding <-> '[...]'
+LIMIT 10;
+```
+
+### Common Issues
+
+**Slow queries**:
+- Increase `ef_search` (sacrifices speed for recall)
+- Check if index is being used (`EXPLAIN`)
+- Verify sufficient memory for index
+
+**Low recall**:
+- Increase `m` and `ef_construction` when creating index
+- Increase `ef_search` at query time
+- Consider using exact search for validation
+
+**High memory usage**:
+- Reduce index size via table partitioning
+- Lower `m` parameter (less connections per layer)
+- Monitor and tune OS page cache
+
+## Best Practices
+
+1. **Choose Right Distance Function**:
+   - L2 for absolute differences (image recognition)
+   - Cosine for directional similarity (text, normalized vectors)
+   - Inner product for ranking/scoring
+
+2. **Normalize Vectors**:
+```python
+# For cosine similarity, normalize before storing
+vector = vector / np.linalg.norm(vector)
+```
+
+3. **Index Only After Bulk Load**:
+```sql
+-- Load data first
+COPY documents FROM 'data.csv';
+
+-- Then create index
+CREATE INDEX NONCONCURRENTLY ON documents 
+  USING ybhnsw (embedding vector_cosine_ops);
+```
+
+4. **Monitor Index Health**:
+- Track index size growth
+- Monitor query latency
+- Rebuild indexes periodically for compaction
+
+5. **Test Recall Quality**:
+```python
+# Compare approximate vs. exact search
+approx_results = search_with_index(query_vector)
+exact_results = search_without_index(query_vector)
+recall = len(set(approx_results) & set(exact_results)) / len(exact_results)
+print(f"Recall: {recall:.2%}")
+```
+
+## Limitations
+
+- **xCluster**: Vector indexes not supported in xCluster replication
+- **Concurrent Index Creation**: `CREATE INDEX CONCURRENTLY` not yet supported
+- **Partial Indexes**: Not supported on vector columns
+- **Index Only Scans**: Vector indexes require table access to fetch other columns
+
+## Learn More
+
+- [Vector Index Architecture](/architecture/design/vector-index)
+- [pgvector Extension Reference](/additional-features/pg-extensions/extension-pgvector)
+- [Build AI Applications with YugabyteDB](/develop/ai)
+- [Multimodal Search Tutorial](/tutorials/vector-search)

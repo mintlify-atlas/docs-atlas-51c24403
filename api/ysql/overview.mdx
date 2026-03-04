@@ -1,0 +1,270 @@
+---
+title: YSQL Overview
+headerTitle: YSQL API Overview
+linkTitle: Overview
+description: Overview of YugabyteDB Structured Query Language (YSQL) - PostgreSQL-compatible distributed SQL API
+---
+
+## Introduction
+
+Yugabyte Structured Query Language (YSQL) is a fully-relational, PostgreSQL-compatible distributed SQL API that provides the best fit for scale-out RDBMS applications requiring ultra-resilience, massive write scalability, and geographic data distribution.
+
+### PostgreSQL Compatibility
+
+YSQL is built using the PostgreSQL 15.2 query layer directly, making it **PostgreSQL-compatible by construction**. This approach ensures that YSQL supports:
+
+- All PostgreSQL data types
+- Complete SQL syntax and semantics
+- PostgreSQL wire protocol
+- PostgreSQL client drivers and tools
+- Most PostgreSQL extensions
+
+To check your PostgreSQL version:
+
+```sql
+SELECT version();
+```
+
+```output
+PostgreSQL 15.2-YB-2025.2.0.0-b0 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 11.2.1 20220127 (Red Hat 11.2.1-9), 64-bit
+```
+
+## Architecture
+
+### Query Layer
+
+YSQL reuses the PostgreSQL query processing layer, including:
+
+- **Parser** - Parses SQL statements into parse trees
+- **Analyzer** - Performs semantic analysis and type checking
+- **Planner/Optimizer** - Generates optimal execution plans using cost-based optimization
+- **Executor** - Executes query plans and returns results
+
+### Storage Layer
+
+Unlike PostgreSQL's heap-based storage, YSQL uses YugabyteDB's distributed DocDB storage engine:
+
+- **LSM-based storage** - Built on RocksDB for efficient writes
+- **Distributed by design** - Automatic sharding and replication
+- **ACID transactions** - Distributed transactions using hybrid logical clocks
+- **Raft consensus** - Strong consistency through Raft replication
+
+## Key Features
+
+### Distributed Transactions
+
+YSQL supports distributed ACID transactions with multiple isolation levels:
+
+<ParamField path="Serializable" type="isolation level">
+  Strictest isolation level providing full serializability across distributed transactions
+</ParamField>
+
+<ParamField path="Snapshot" type="isolation level">
+  Prevents phantom reads and provides consistent snapshots (default)
+</ParamField>
+
+<ParamField path="Read Committed" type="isolation level">
+  PostgreSQL-compatible isolation level that prevents dirty reads
+</ParamField>
+
+### Automatic Sharding
+
+Tables are automatically sharded based on the primary key:
+
+```sql
+-- Hash sharding (default)
+CREATE TABLE users (
+  user_id INT PRIMARY KEY,
+  name TEXT,
+  email TEXT
+);
+
+-- Range sharding
+CREATE TABLE events (
+  event_time TIMESTAMP,
+  event_type TEXT,
+  data JSONB,
+  PRIMARY KEY (event_time ASC)
+) SPLIT AT VALUES (
+  ('2024-01-01'),
+  ('2024-07-01'),
+  ('2025-01-01')
+);
+
+-- Composite sharding
+CREATE TABLE metrics (
+  tenant_id INT,
+  metric_name TEXT,
+  timestamp TIMESTAMP,
+  value DOUBLE PRECISION,
+  PRIMARY KEY ((tenant_id) HASH, metric_name, timestamp DESC)
+);
+```
+
+### High Availability
+
+- **Automatic failover** - Raft consensus enables sub-3-second failover
+- **Zero data loss** - Synchronous replication ensures RPO=0
+- **Multi-region support** - Deploy across regions and clouds
+- **Read replicas** - Serve stale reads with low latency
+
+### Geographic Distribution
+
+YSQL supports tablespace-based geo-distribution:
+
+```sql
+-- Create tablespaces for different regions
+CREATE TABLESPACE us_west WITH (replica_placement='
+  {"num_replicas":3, "placement_blocks":
+  [{"cloud":"aws","region":"us-west-2","zone":"us-west-2a","min_num_replicas":1}]}'\);
+
+-- Pin table to specific region
+CREATE TABLE us_customers (
+  customer_id INT PRIMARY KEY,
+  name TEXT,
+  region TEXT
+) TABLESPACE us_west;
+```
+
+## YSQL Components
+
+### Data Definition Language (DDL)
+
+Create and modify database schema:
+
+- `CREATE`, `ALTER`, `DROP` for databases, schemas, tables, indexes
+- `CREATE EXTENSION` for PostgreSQL extensions
+- `CREATE TABLESPACE` for geo-distribution
+- `CREATE TYPE` for custom types
+
+### Data Manipulation Language (DML)
+
+Query and modify data:
+
+- `SELECT` with JOINs, subqueries, CTEs, window functions
+- `INSERT`, `UPDATE`, `DELETE` with `RETURNING` clause
+- `INSERT ON CONFLICT` (upsert)
+- `COPY` for bulk data loading
+
+### Data Control Language (DCL)
+
+Manage security and access:
+
+- `CREATE ROLE`, `ALTER ROLE`, `DROP ROLE`
+- `GRANT`, `REVOKE` for permissions
+- Row-level security (RLS) with policies
+- Column-level encryption
+
+### Procedural Language
+
+- **PL/pgSQL** - PostgreSQL's procedural language
+- **Stored procedures** - `CREATE PROCEDURE`
+- **Functions** - `CREATE FUNCTION`
+- **Triggers** - `CREATE TRIGGER`
+- **Event triggers** - System-level triggers
+
+## Performance Features
+
+### Cost-Based Optimizer
+
+YSQL includes an enhanced cost-based optimizer:
+
+```sql
+-- Enable CBO (default in v2025.2+)
+SET yb_enable_optimizer_statistics = on;
+
+-- Run statistics collection
+ANALYZE my_table;
+
+-- View query plan
+EXPLAIN (ANALYZE, COSTS, BUFFERS) 
+SELECT * FROM my_table WHERE id > 1000;
+```
+
+### Parallel Query Execution
+
+Parallel query execution for improved performance:
+
+```sql
+SET max_parallel_workers_per_gather = 4;
+SET parallel_setup_cost = 100;
+SET parallel_tuple_cost = 0.01;
+```
+
+### Bitmap Scans
+
+Efficient index scans for complex queries:
+
+```sql
+SET yb_enable_bitmapscan = on;
+```
+
+### Batched Nested Loop Joins
+
+Optimized joins for distributed queries:
+
+```sql
+SET yb_bnl_batch_size = 1024;
+```
+
+## Differences from PostgreSQL
+
+While YSQL is highly compatible with PostgreSQL, some differences exist due to the distributed architecture:
+
+### Storage Differences
+
+1. **Primary key required** - Every table must have a primary key (explicit or implicit `ybrowid`)
+2. **No heap storage** - Tables are stored as LSM trees, not heap files
+3. **No TOAST** - Large values handled differently
+
+### Feature Limitations
+
+1. **Serializable isolation** - Uses different implementation than PostgreSQL
+2. **Foreign data wrappers** - Limited support for some FDWs
+3. **Advisory locks** - Not supported in distributed mode
+4. **Temporary tables** - Stored locally on each node
+
+### Performance Characteristics
+
+1. **Transactions** - Higher overhead for single-row operations
+2. **Scans** - Table scans distributed across nodes
+3. **Joins** - May require data movement between nodes
+
+## Getting Started
+
+Connect to YSQL using the `ysqlsh` client:
+
+```bash
+./bin/ysqlsh -h 127.0.0.1 -p 5433
+```
+
+Create your first database:
+
+```sql
+CREATE DATABASE myapp;
+\c myapp
+
+CREATE TABLE products (
+  product_id SERIAL PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT,
+  price NUMERIC(10,2),
+  created_at TIMESTAMP DEFAULT now()
+);
+
+INSERT INTO products (name, description, price)
+VALUES 
+  ('Widget A', 'High-quality widget', 29.99),
+  ('Widget B', 'Premium widget', 49.99);
+
+SELECT * FROM products;
+```
+
+## Additional Resources
+
+- [YSQL Data Types](/api/ysql/data-types)
+- [YSQL Statements](/api/ysql/statements)
+- [YSQL Functions](/api/ysql/functions)
+- [YSQL Extensions](/api/ysql/extensions)
+
+For detailed PostgreSQL documentation, refer to the [PostgreSQL 15 Documentation](https://www.postgresql.org/docs/15/index.html).

@@ -1,0 +1,278 @@
+---
+title: Introduction to YugabyteDB
+description: Learn what YugabyteDB is and why it's the right choice for your distributed database needs
+---
+
+## What is YugabyteDB?
+
+YugabyteDB is a PostgreSQL-compatible, high-performance, cloud-native distributed SQL database. It combines the best of traditional relational databases with the scalability and resilience of NoSQL systems, making it the ideal choice for cloud-native applications that demand both transactional consistency and the ability to handle massive data volumes.
+
+<Note>
+YugabyteDB is 100% open source under the Apache 2.0 license. The source code is available on [GitHub](https://github.com/yugabyte/yugabyte-db).
+</Note>
+
+## Who should use YugabyteDB?
+
+YugabyteDB is best suited for cloud-native OLTP (real-time, business-critical) applications that need absolute data correctness and require at least one of the following:
+
+- **Horizontal scalability** - Your application needs to scale beyond a single database instance
+- **High tolerance to failures** - You require continuous availability even during infrastructure failures
+- **Globally-distributed deployments** - Your users are distributed across multiple regions or continents
+- **PostgreSQL compatibility** - You want distributed SQL without sacrificing PostgreSQL features
+
+## Why YugabyteDB?
+
+### PostgreSQL compatibility
+
+YugabyteDB SQL (YSQL) reuses the PostgreSQL query layer, providing compatibility with PostgreSQL 15. You get:
+
+- Familiar PostgreSQL syntax and semantics
+- Support for PostgreSQL data types, functions, and operators
+- Stored procedures, triggers, and extensions
+- Your existing PostgreSQL tools and drivers work seamlessly
+
+<Tip>
+Migrating from PostgreSQL? YugabyteDB offers a seamless lift-and-shift approach. Check out [YugabyteDB Voyager](https://docs.yugabyte.com/stable/yugabyte-voyager/) for simplified database migration.
+</Tip>
+
+### Built for the cloud
+
+YugabyteDB is designed from the ground up as a cloud-native database:
+
+- Deploy on any public cloud (AWS, GCP, Azure) or on-premises
+- Native Kubernetes support for containerized environments
+- Multi-cloud and hybrid cloud deployments
+- No dependency on atomic clocks or specialized hardware
+
+### Resilience and high availability
+
+YugabyteDB is extremely resilient to common outages:
+
+- **Zero data loss (RPO = 0)** - No data is lost on failure
+- **3-second recovery (RTO = 3s)** - Failed nodes recover automatically
+- Tolerates disk, node, zone, region, and cloud failures
+- Native failover and repair without manual intervention
+
+<Note>
+For a typical multi-zone deployment on a public cloud, YugabyteDB provides an RPO of 0 (no data loss) and an RTO of 3 seconds (recovery time).
+</Note>
+
+### Distributed by design
+
+Unlike traditional databases with bolted-on replication, YugabyteDB is distributed at its core:
+
+- Data automatically sharded across nodes using smart partitioning
+- Synchronous replication using Raft consensus protocol
+- Strong consistency for reads and writes
+- ACID transactions across multiple nodes and data centers
+
+## Key differentiators
+
+<CardGroup cols={2}>
+  <Card title="Distributed SQL" icon="database">
+    Full SQL support with distributed ACID transactions, joins, and foreign keys across nodes.
+  </Card>
+  
+  <Card title="Linear scalability" icon="arrow-trend-up">
+    Scale reads and writes by adding nodes. No application changes required.
+  </Card>
+  
+  <Card title="Continuous availability" icon="shield-check">
+    Automatic failover and repair. Survives node, zone, and region failures.
+  </Card>
+  
+  <Card title="Multi-API support" icon="plug">
+    YSQL (PostgreSQL) and YCQL (Cassandra) APIs on the same database.
+  </Card>
+</CardGroup>
+
+## Architecture overview
+
+YugabyteDB uses a layered architecture that separates concerns:
+
+```
+┌─────────────────────────────────────────┐
+│         Query Layer (YSQL/YCQL)         │  ← PostgreSQL-compatible SQL
+├─────────────────────────────────────────┤
+│       Distributed Transactions          │  ← ACID across nodes
+├─────────────────────────────────────────┤
+│    Sharding & Replication (Raft)        │  ← Auto-sharding & consensus
+├─────────────────────────────────────────┤
+│      Storage Layer (DocDB/RocksDB)      │  ← High-performance storage
+└─────────────────────────────────────────┘
+```
+
+<Steps>
+  <Step title="Query layer">
+    Handles SQL queries using the PostgreSQL query processor. Provides full SQL compatibility.
+  </Step>
+  
+  <Step title="Transaction layer">
+    Implements distributed ACID transactions using hybrid logical clocks for global ordering.
+  </Step>
+  
+  <Step title="Replication layer">
+    Uses Raft consensus for synchronous replication. Ensures strong consistency across replicas.
+  </Step>
+  
+  <Step title="Storage layer">
+    DocDB storage engine built on RocksDB. Optimized for SSDs and NVMe drives.
+  </Step>
+</Steps>
+
+## Use cases
+
+YugabyteDB excels in scenarios requiring:
+
+### Cloud-native applications
+
+Build modern applications that need to scale elastically:
+- Microservices architectures
+- E-commerce platforms
+- SaaS applications
+- Mobile backends
+
+### Mission-critical systems
+
+Deploy systems that cannot tolerate downtime:
+- Financial services and payments
+- Healthcare systems
+- Telecommunications
+- Gaming platforms
+
+### Global applications
+
+Serve users worldwide with low latency:
+- Multi-region deployments
+- Geo-distributed data
+- Compliance with data residency requirements
+- Row-level geo-partitioning
+
+### IoT and time-series
+
+Handle high-volume write workloads:
+- IoT sensor data ingestion
+- Metrics and monitoring
+- Audit logs
+- Real-time analytics
+
+## Design principles
+
+YugabyteDB was built with several key design goals:
+
+<CardGroup cols={2}>
+  <Card title="Consistency first">
+    Strong consistency by default. No eventual consistency surprises.
+  </Card>
+  
+  <Card title="Operational simplicity">
+    Automated deployment, scaling, and self-healing. Minimal ops overhead.
+  </Card>
+  
+  <Card title="SQL compatibility">
+    Full PostgreSQL compatibility. Use familiar tools and patterns.
+  </Card>
+  
+  <Card title="Cloud portability">
+    Deploy anywhere. No vendor lock-in.
+  </Card>
+</CardGroup>
+
+## Performance characteristics
+
+YugabyteDB is optimized for:
+
+- **High write throughput** - Handle thousands of writes per second per node
+- **Low latency reads** - Single-digit millisecond latencies with smart client drivers
+- **High client concurrency** - Support thousands of concurrent connections
+- **Large data sets** - Store terabytes of data per node
+
+<Warning>
+For optimal performance, deploy YugabyteDB on SSDs or NVMe drives. The database is written in C++ and optimized for modern storage hardware.
+</Warning>
+
+## Comparison with other databases
+
+### vs. PostgreSQL
+
+- **Similarities**: Wire-compatible SQL, same syntax and semantics
+- **Advantages**: Horizontal scalability, automatic failover, multi-region support
+- **Trade-off**: Slightly higher latency due to distributed consensus
+
+### vs. Cassandra
+
+- **Similarities**: Distributed architecture, high availability
+- **Advantages**: ACID transactions, SQL support, strong consistency
+- **Trade-off**: Requires more nodes for fault tolerance (3 vs 1)
+
+### vs. Cloud-native databases (Aurora, Cloud Spanner)
+
+- **Similarities**: Distributed SQL, high availability
+- **Advantages**: Open source, no vendor lock-in, deploy anywhere
+- **Trade-off**: Self-managed (though YugabyteDB Aeon provides managed service)
+
+## Recent innovations
+
+YugabyteDB continues to evolve with cutting-edge features:
+
+### PostgreSQL 15 compatibility (v2025.1+)
+
+The latest stable release includes:
+- Stored generated columns
+- Foreign keys on partitioned tables
+- Incremental sort optimization
+- Memoization for faster queries
+
+### AI/ML capabilities
+
+Build intelligent applications with:
+- **pgvector extension** - Store and query high-dimensional vectors
+- **HNSW indexing** - Fast similarity search for AI workloads
+- Native support for embedding-based retrieval
+
+### Enhanced performance
+
+New optimizations in recent releases:
+- **Cost-based optimizer (CBO)** - Smarter query plans based on statistics
+- **Bitmap scan** - Efficient multi-index queries
+- **Parallel query execution** - Leverage multiple CPU cores
+- **Auto analyze** - Automatic statistics collection
+
+<Tip>
+Starting with v2025.2, CBO, auto analyze, and bitmap scan are enabled by default on new clusters for optimal performance.
+</Tip>
+
+## Getting started
+
+Ready to try YugabyteDB? Here's what to do next:
+
+<CardGroup cols={2}>
+  <Card title="Quick start" icon="rocket" href="./quick-start">
+    Get a local cluster running in under 5 minutes
+  </Card>
+  
+  <Card title="Installation" icon="download" href="./installation">
+    Install YugabyteDB on your preferred platform
+  </Card>
+  
+  <Card title="Core features" icon="sparkles" href="./core-features">
+    Explore YugabyteDB's key capabilities
+  </Card>
+  
+  <Card title="Architecture" icon="sitemap" href="https://docs.yugabyte.com/stable/architecture/">
+    Deep dive into the technical architecture
+  </Card>
+</CardGroup>
+
+## Community and support
+
+Join the YugabyteDB community:
+
+- **Slack** - [Join the community](https://communityinviter.com/apps/yugabyte-db/register) for real-time help
+- **Forum** - [Ask questions](https://forum.yugabyte.com) and share knowledge
+- **GitHub** - [Contribute](https://github.com/yugabyte/yugabyte-db) to the open source project
+- **Stack Overflow** - [Search and ask](https://stackoverflow.com/questions/tagged/yugabyte-db) technical questions
+
+<Note>
+Need enterprise support? Check out [YugabyteDB Anywhere](https://docs.yugabyte.com/stable/yugabyte-platform/) for self-managed deployments or [YugabyteDB Aeon](https://docs.yugabyte.com/stable/yugabyte-cloud/) for a fully managed cloud service.
+</Note>

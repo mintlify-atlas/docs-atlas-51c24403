@@ -1,0 +1,752 @@
+---
+title: Monitoring
+description: Comprehensive monitoring setup and metrics analysis for YugabyteDB clusters
+---
+
+Effective monitoring is essential for maintaining healthy YugabyteDB clusters. This guide covers metrics collection, alerting, and observability best practices.
+
+## Monitoring Architecture
+
+### Components
+
+**Metrics Exporters:**
+- YB-Master metrics endpoint: `http://master-ip:7000/metrics`
+- YB-TServer metrics endpoint: `http://tserver-ip:9000/metrics`
+- YCQL metrics endpoint: `http://tserver-ip:12000/metrics`
+- YSQL metrics endpoint: `http://tserver-ip:13000/metrics`
+
+**Collection System:**
+- Prometheus (recommended)
+- Custom metrics collectors
+- Cloud-native monitoring (CloudWatch, Stackdriver, Azure Monitor)
+
+**Visualization:**
+- Grafana dashboards
+- YugabyteDB Platform UI
+- Custom dashboards
+
+**Alerting:**
+- Prometheus Alertmanager
+- PagerDuty integration
+- Email/Slack notifications
+
+## Quick Start: Web Interfaces
+
+### Built-in Web Consoles
+
+**YB-Master Console:**
+```
+http://<master-ip>:7000
+```
+
+Provides:
+- Cluster overview
+- Table and tablet information
+- Master leader status
+- Recent operations log
+- Replication status
+
+**YB-TServer Console:**
+```
+http://<tserver-ip>:9000
+```
+
+Provides:
+- Tablet server details
+- Hosted tablets list
+- Resource utilization
+- Connection statistics
+- Slow operation traces
+
+**YSQL Metrics:**
+```
+http://<tserver-ip>:13000
+```
+
+Provides:
+- PostgreSQL statistics
+- Query performance metrics
+- Connection pool status
+- Statement statistics
+
+**YCQL Metrics:**
+```
+http://<tserver-ip>:12000
+```
+
+Provides:
+- CQL request metrics
+- Keyspace statistics
+- Connection metrics
+
+## Key Metrics
+
+### Cluster Health Metrics
+
+**Master Metrics:**
+
+```
+# Master leadership
+master_is_leader
+
+# Number of tablet servers
+cluster_num_tablet_servers
+
+# Tables and tablets
+cluster_num_tables
+cluster_num_tablets
+
+# Replication lag
+follower_lag_ms
+```
+
+**Tablet Server Metrics:**
+
+```
+# Tablet counts by state
+tablet_state_RUNNING
+tablet_state_FAILED
+tablet_state_SHUTDOWN
+
+# Uptime
+server_uptime_ms
+
+# Heartbeat status
+heartbeat_latency_ms
+```
+
+### Performance Metrics
+
+**Latency Metrics:**
+
+```
+# Read operations
+handler_latency_yb_tserver_TabletServerService_Read_p50
+handler_latency_yb_tserver_TabletServerService_Read_p99
+handler_latency_yb_tserver_TabletServerService_Read_p999
+
+# Write operations
+handler_latency_yb_tserver_TabletServerService_Write_p50
+handler_latency_yb_tserver_TabletServerService_Write_p99
+handler_latency_yb_tserver_TabletServerService_Write_p999
+
+# Transaction latency
+transaction_manager_pending_count
+transaction_manager_expired_count
+```
+
+**Throughput Metrics:**
+
+```
+# Operations per second
+rpc_incoming_request_count
+
+# YSQL operations
+ysql_server_rpc_requests_per_second
+ysql_server_rpc_connections
+
+# YCQL operations
+cql_server_rpc_requests_per_second
+cql_server_rpc_connections
+```
+
+### Resource Utilization
+
+**CPU Metrics:**
+
+```
+# CPU usage percentage
+cpu_usage_user
+cpu_usage_system
+
+# Context switches
+context_switches
+
+# Thread counts
+threads_running
+threads_started
+```
+
+**Memory Metrics:**
+
+```
+# Memory consumption
+mem_tracker_server
+mem_tracker_Call_Queue
+mem_tracker_Tablets
+mem_tracker_BlockCache
+mem_tracker_RegularDB_MemTable
+
+# Cache statistics
+rocksdb_block_cache_hit
+rocksdb_block_cache_miss
+rocksdb_block_cache_usage
+```
+
+**Disk Metrics:**
+
+```
+# Disk space
+disk_total_bytes
+disk_free_bytes
+
+# I/O statistics
+rocksdb_bytes_read
+rocksdb_bytes_written
+rocksdb_compact_read_bytes
+rocksdb_compact_write_bytes
+
+# WAL metrics
+log_bytes_logged
+log_reader_bytes_read
+```
+
+**Network Metrics:**
+
+```
+# Bytes transferred
+rpc_inbound_bytes_rate
+rpc_outbound_bytes_rate
+
+# Connection counts
+rpc_connections_alive
+rpc_connections_accepted
+```
+
+### Replication Metrics
+
+```
+# Replication lag
+follower_lag_ms
+
+# Consensus operations
+consensus_replicate_batch_latency
+consensus_update_lag_ms
+
+# Remote bootstrap
+remote_bootstrap_sessions_active
+remote_bootstrap_sessions_succeeded
+remote_bootstrap_sessions_failed
+```
+
+### Compaction Metrics
+
+```
+# Compaction activity
+rocksdb_compaction_pending
+rocksdb_num_running_compactions
+rocksdb_estimate_pending_compaction_bytes
+
+# Level statistics
+rocksdb_level0_num_files
+rocksdb_level0_size_bytes
+
+# Flush metrics
+rocksdb_flush_pending
+rocksdb_num_running_flushes
+```
+
+## Prometheus Setup
+
+### Installation
+
+**Install Prometheus:**
+
+```bash
+wget https://github.com/prometheus/prometheus/releases/download/v2.40.0/prometheus-2.40.0.linux-amd64.tar.gz
+tar xvfz prometheus-*.tar.gz
+cd prometheus-*
+```
+
+**Configure prometheus.yml:**
+
+```yaml
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # YB-Master nodes
+  - job_name: 'yb-master'
+    metrics_path: /prometheus-metrics
+    static_configs:
+      - targets:
+        - 'master1:7000'
+        - 'master2:7000'
+        - 'master3:7000'
+
+  # YB-TServer nodes
+  - job_name: 'yb-tserver'
+    metrics_path: /prometheus-metrics
+    static_configs:
+      - targets:
+        - 'tserver1:9000'
+        - 'tserver2:9000'
+        - 'tserver3:9000'
+
+  # YSQL metrics
+  - job_name: 'ysql'
+    metrics_path: /prometheus-metrics
+    static_configs:
+      - targets:
+        - 'tserver1:13000'
+        - 'tserver2:13000'
+        - 'tserver3:13000'
+
+  # YCQL metrics
+  - job_name: 'ycql'
+    metrics_path: /prometheus-metrics
+    static_configs:
+      - targets:
+        - 'tserver1:12000'
+        - 'tserver2:12000'
+        - 'tserver3:12000'
+
+  # Node exporter for system metrics
+  - job_name: 'node'
+    static_configs:
+      - targets:
+        - 'master1:9100'
+        - 'master2:9100'
+        - 'master3:9100'
+        - 'tserver1:9100'
+        - 'tserver2:9100'
+        - 'tserver3:9100'
+```
+
+**Start Prometheus:**
+
+```bash
+./prometheus --config.file=prometheus.yml
+```
+
+Access UI at: `http://localhost:9090`
+
+### Node Exporter Setup
+
+Monitor system-level metrics:
+
+```bash
+# Install node exporter
+wget https://github.com/prometheus/node_exporter/releases/download/v1.5.0/node_exporter-1.5.0.linux-amd64.tar.gz
+tar xvfz node_exporter-*.tar.gz
+cd node_exporter-*
+
+# Run on each node
+./node_exporter &
+```
+
+## Grafana Setup
+
+### Installation
+
+```bash
+# Install Grafana
+wget https://dl.grafana.com/oss/release/grafana-9.3.6.linux-amd64.tar.gz
+tar -zxvf grafana-9.3.6.linux-amd64.tar.gz
+cd grafana-9.3.6
+
+# Start Grafana
+./bin/grafana-server
+```
+
+Access UI at: `http://localhost:3000` (default: admin/admin)
+
+### Configure Data Source
+
+1. Navigate to Configuration > Data Sources
+2. Add Prometheus data source
+3. URL: `http://localhost:9090`
+4. Save & Test
+
+### Import YugabyteDB Dashboards
+
+YugabyteDB provides pre-built Grafana dashboards:
+
+```bash
+# Download dashboards
+git clone https://github.com/yugabyte/yugabyte-db.git
+cd yugabyte-db/cloud/kubernetes/helm/grafana
+```
+
+Import dashboards:
+1. Grafana UI > Dashboards > Import
+2. Upload JSON files from repository
+3. Select Prometheus data source
+
+Key dashboards:
+- **Cluster Overview**: High-level cluster health
+- **Node Details**: Per-node resource utilization
+- **Table Details**: Per-table performance metrics
+- **YSQL Metrics**: PostgreSQL-specific metrics
+- **Replication Metrics**: Cross-region replication status
+
+## Alert Configuration
+
+### Prometheus Alert Rules
+
+Create `alert_rules.yml`:
+
+```yaml
+groups:
+  - name: yugabytedb_alerts
+    interval: 30s
+    rules:
+      # Node down alert
+      - alert: NodeDown
+        expr: up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Node {{ $labels.instance }} is down"
+          description: "Node has been down for more than 2 minutes"
+
+      # High CPU usage
+      - alert: HighCPUUsage
+        expr: cpu_usage_user > 85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage on {{ $labels.instance }}"
+          description: "CPU usage is above 85% for 5 minutes"
+
+      # Memory pressure
+      - alert: HighMemoryUsage
+        expr: (mem_tracker_server / 1024 / 1024 / 1024) > 50
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage on {{ $labels.instance }}"
+          description: "Memory usage exceeds 50GB"
+
+      # Disk space low
+      - alert: DiskSpaceLow
+        expr: (disk_free_bytes / disk_total_bytes) * 100 < 15
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low disk space on {{ $labels.instance }}"
+          description: "Less than 15% disk space remaining"
+
+      # High write latency
+      - alert: HighWriteLatency
+        expr: handler_latency_yb_tserver_TabletServerService_Write_p99 > 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High write latency on {{ $labels.instance }}"
+          description: "P99 write latency exceeds 100ms"
+
+      # Failed tablets
+      - alert: FailedTablets
+        expr: tablet_state_FAILED > 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Failed tablets detected on {{ $labels.instance }}"
+          description: "{{ $value }} tablets in FAILED state"
+
+      # Replication lag
+      - alert: HighReplicationLag
+        expr: follower_lag_ms > 10000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High replication lag on {{ $labels.instance }}"
+          description: "Follower lag exceeds 10 seconds"
+
+      # Compaction pending
+      - alert: HighCompactionPending
+        expr: rocksdb_estimate_pending_compaction_bytes > 10737418240
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High pending compaction on {{ $labels.instance }}"
+          description: "More than 10GB pending compaction"
+```
+
+### Alertmanager Configuration
+
+Create `alertmanager.yml`:
+
+```yaml
+global:
+  resolve_timeout: 5m
+  smtp_smarthost: 'smtp.gmail.com:587'
+  smtp_from: 'alerts@example.com'
+  smtp_auth_username: 'alerts@example.com'
+  smtp_auth_password: 'password'
+
+route:
+  group_by: ['alertname', 'cluster']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  receiver: 'team-email'
+  routes:
+    - match:
+        severity: critical
+      receiver: 'pagerduty'
+
+receivers:
+  - name: 'team-email'
+    email_configs:
+      - to: 'team@example.com'
+        headers:
+          Subject: 'YugabyteDB Alert: {{ .GroupLabels.alertname }}'
+
+  - name: 'pagerduty'
+    pagerduty_configs:
+      - service_key: '<pagerduty-service-key>'
+        description: '{{ .GroupLabels.alertname }}'
+
+  - name: 'slack'
+    slack_configs:
+      - api_url: '<slack-webhook-url>'
+        channel: '#alerts'
+        text: '{{ .CommonAnnotations.summary }}'
+```
+
+**Start Alertmanager:**
+
+```bash
+./alertmanager --config.file=alertmanager.yml
+```
+
+## Query Performance Monitoring
+
+### YSQL Query Statistics
+
+Enable pg_stat_statements:
+
+```sql
+-- Load extension
+CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+
+-- View slow queries
+SELECT 
+  queryid,
+  query,
+  calls,
+  total_exec_time / 1000 as total_time_sec,
+  mean_exec_time,
+  max_exec_time,
+  stddev_exec_time
+FROM pg_stat_statements
+ORDER BY mean_exec_time DESC
+LIMIT 20;
+
+-- Reset statistics
+SELECT pg_stat_statements_reset();
+```
+
+### Active Session History (ASH)
+
+YugabyteDB collects active session samples for query analysis:
+
+```sql
+-- Query ASH data (requires troubleshooting framework)
+SELECT 
+  sample_time,
+  wait_event_type,
+  wait_event,
+  query,
+  client_node_ip
+FROM yb_active_session_history
+WHERE sample_time > NOW() - INTERVAL '1 hour'
+ORDER BY sample_time DESC;
+```
+
+## Log Monitoring
+
+### Log Locations
+
+```
+# Master logs
+/home/yugabyte/master/logs/yb-master.INFO
+/home/yugabyte/master/logs/yb-master.WARNING
+/home/yugabyte/master/logs/yb-master.ERROR
+/home/yugabyte/master/logs/yb-master.FATAL
+
+# TServer logs
+/home/yugabyte/tserver/logs/yb-tserver.INFO
+/home/yugabyte/tserver/logs/yb-tserver.WARNING
+/home/yugabyte/tserver/logs/yb-tserver.ERROR
+/home/yugabyte/tserver/logs/yb-tserver.FATAL
+
+# PostgreSQL logs
+/home/yugabyte/tserver/logs/postgresql-*.log
+```
+
+### Key Log Patterns
+
+**Watch for errors:**
+
+```bash
+# Monitor ERROR logs in real-time
+tail -f /home/yugabyte/tserver/logs/yb-tserver.ERROR
+
+# Search for specific issues
+grep -i "failed" /home/yugabyte/tserver/logs/yb-tserver.WARNING
+grep -i "timeout" /home/yugabyte/tserver/logs/yb-tserver.INFO
+```
+
+**Slow operation logs:**
+
+Operations exceeding 75% of timeout are logged:
+
+```
+W0325 06:47:13.032176 inbound_call.cc:204] 
+  Call ConsensusService.UpdateConsensus from 127.0.0.1:61050 took 2644ms
+Trace:
+  0325 06:47:10.388015 (+0us) Inserting onto call queue
+  0325 06:47:10.394859 (+6844us) Handling call
+  0325 06:47:13.032064 (+2581367us) Operation complete
+```
+
+### Log Aggregation
+
+**Using ELK Stack:**
+
+```bash
+# Install Filebeat
+curl -L -O https://artifacts.elastic.co/downloads/beats/filebeat/filebeat-8.6.0-linux-x86_64.tar.gz
+tar xzvf filebeat-8.6.0-linux-x86_64.tar.gz
+
+# Configure filebeat.yml
+filebeat.inputs:
+  - type: log
+    paths:
+      - /home/yugabyte/*/logs/*.log
+
+output.elasticsearch:
+  hosts: ["elasticsearch:9200"]
+
+# Start Filebeat
+./filebeat -e
+```
+
+## Custom Metrics
+
+### Exporting Custom Metrics
+
+YugabyteDB exposes metrics in Prometheus format:
+
+```bash
+# Fetch all metrics
+curl http://tserver-ip:9000/prometheus-metrics
+
+# Filter specific metrics
+curl http://tserver-ip:9000/prometheus-metrics | grep latency
+```
+
+### Creating Derived Metrics
+
+Prometheus PromQL for calculated metrics:
+
+```promql
+# Cache hit rate
+rate(rocksdb_block_cache_hit[5m]) / 
+  (rate(rocksdb_block_cache_hit[5m]) + rate(rocksdb_block_cache_miss[5m]))
+
+# Disk utilization percentage
+(disk_total_bytes - disk_free_bytes) / disk_total_bytes * 100
+
+# Average write latency across cluster
+avg(handler_latency_yb_tserver_TabletServerService_Write_p99)
+
+# Total ops per second
+sum(rate(rpc_incoming_request_count[1m]))
+```
+
+## Best Practices
+
+### Monitoring Strategy
+
+1. **Implement monitoring before production**
+2. **Establish baseline metrics** for normal operation
+3. **Set alerts on leading indicators** (CPU, disk, latency)
+4. **Review dashboards regularly** for trends
+5. **Test alert routing** before incidents
+
+### Metric Retention
+
+- **Real-time**: 15-second granularity, 24 hours
+- **Recent**: 1-minute granularity, 7 days
+- **Historical**: 5-minute granularity, 90 days
+- **Long-term**: 1-hour granularity, 1+ years
+
+### Dashboard Organization
+
+**Critical Metrics Dashboard:**
+- Cluster status
+- Node availability
+- Error rates
+- Critical alerts
+
+**Performance Dashboard:**
+- Latency percentiles
+- Throughput trends
+- Resource utilization
+- Compaction status
+
+**Capacity Planning Dashboard:**
+- Disk usage trends
+- Memory growth
+- Connection counts
+- Table size growth
+
+### Alert Hygiene
+
+1. **Avoid alert fatigue** - tune thresholds appropriately
+2. **Include runbook links** in alert descriptions
+3. **Use severity levels** correctly (critical vs warning)
+4. **Set escalation policies** for unacknowledged alerts
+5. **Review and adjust** alert rules quarterly
+
+## Troubleshooting Monitoring
+
+### Metrics Not Appearing
+
+**Check endpoints:**
+```bash
+# Test metrics endpoint
+curl http://tserver-ip:9000/prometheus-metrics
+
+# Check service status
+ps aux | grep yb-tserver
+netstat -tlnp | grep 9000
+```
+
+**Verify Prometheus configuration:**
+```bash
+# Check Prometheus targets
+http://prometheus:9090/targets
+
+# View Prometheus logs
+tail -f prometheus.log
+```
+
+### High Cardinality Issues
+
+Limit label cardinality to prevent Prometheus overload:
+
+- Avoid labels with unbounded values
+- Use recording rules for expensive queries
+- Aggregate high-cardinality metrics
+- Consider metric federation for large clusters
+
+## Next Steps
+
+- [Performance Tuning](/operations/performance-tuning) - Optimize based on metrics
+- [Troubleshooting](/operations/troubleshooting) - Diagnose issues from metrics
+- [Admin Guide](/operations/admin-guide) - Administrative monitoring tasks
+- [Backup and Restore](/operations/backup-restore) - Monitor backup health

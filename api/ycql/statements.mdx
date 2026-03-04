@@ -1,0 +1,705 @@
+---
+title: Statements
+description: YCQL DDL and DML statement reference
+---
+
+## Overview
+
+YCQL supports a comprehensive set of Data Definition Language (DDL) and Data Manipulation Language (DML) statements compatible with Apache Cassandra CQL.
+
+## Data Definition Language (DDL)
+
+### CREATE KEYSPACE
+
+Creates a new keyspace (database).
+
+**Syntax**:
+
+```sql
+CREATE KEYSPACE [IF NOT EXISTS] keyspace_name
+WITH REPLICATION = {
+  'class': 'SimpleStrategy',
+  'replication_factor': N
+}
+[AND DURABLE_WRITES = true|false];
+```
+
+**Example**:
+
+```sql
+CREATE KEYSPACE my_app
+WITH REPLICATION = {
+  'class': 'SimpleStrategy',
+  'replication_factor': 3
+};
+
+CREATE KEYSPACE IF NOT EXISTS test_db
+WITH REPLICATION = {
+  'class': 'SimpleStrategy',
+  'replication_factor': 1
+}
+AND DURABLE_WRITES = true;
+```
+
+**Parameters**:
+- `replication_factor`: Number of replicas (default: 3)
+- `DURABLE_WRITES`: Enable/disable commit log (default: true)
+
+### ALTER KEYSPACE
+
+Modifies an existing keyspace.
+
+**Syntax**:
+
+```sql
+ALTER KEYSPACE keyspace_name
+WITH REPLICATION = {...}
+[AND DURABLE_WRITES = true|false];
+```
+
+**Example**:
+
+```sql
+ALTER KEYSPACE my_app
+WITH REPLICATION = {
+  'class': 'SimpleStrategy',
+  'replication_factor': 5
+};
+```
+
+### DROP KEYSPACE
+
+Deletes a keyspace and all its tables.
+
+**Syntax**:
+
+```sql
+DROP KEYSPACE [IF EXISTS] keyspace_name;
+```
+
+**Example**:
+
+```sql
+DROP KEYSPACE my_app;
+DROP KEYSPACE IF EXISTS temp_keyspace;
+```
+
+### USE
+
+Sets the current keyspace for the session.
+
+**Syntax**:
+
+```sql
+USE keyspace_name;
+```
+
+**Example**:
+
+```sql
+USE my_app;
+```
+
+### CREATE TABLE
+
+Creates a new table.
+
+**Syntax**:
+
+```sql
+CREATE TABLE [IF NOT EXISTS] [keyspace_name.]table_name (
+  column_name data_type [PRIMARY KEY],
+  ...,
+  PRIMARY KEY ((partition_key[, ...]), [clustering_key[, ...]])
+)
+[WITH option = value [AND ...]];
+```
+
+**Example**:
+
+```sql
+-- Simple primary key
+CREATE TABLE users (
+  user_id INT PRIMARY KEY,
+  name VARCHAR,
+  email VARCHAR
+);
+
+-- Composite partition key and clustering columns
+CREATE TABLE events (
+  user_id INT,
+  event_type VARCHAR,
+  event_time TIMESTAMP,
+  data JSONB,
+  PRIMARY KEY ((user_id, event_type), event_time)
+)
+WITH CLUSTERING ORDER BY (event_time DESC);
+
+-- With table properties
+CREATE TABLE products (
+  product_id INT,
+  category VARCHAR,
+  name VARCHAR,
+  price DECIMAL,
+  PRIMARY KEY ((category), product_id)
+)
+WITH transactions = {'enabled': true}
+AND default_time_to_live = 86400;
+
+-- Define primary key before columns
+CREATE TABLE orders (
+  order_id INT,
+  PRIMARY KEY ((customer_id, order_date), order_id),
+  customer_id INT,
+  order_date DATE,
+  total DECIMAL
+);
+```
+
+**Common Table Properties**:
+
+- `transactions`: Enable ACID transactions
+  ```sql
+  WITH transactions = {'enabled': true}
+  ```
+
+- `default_time_to_live`: Automatic row expiration in seconds
+  ```sql
+  WITH default_time_to_live = 86400  -- 24 hours
+  ```
+
+- `CLUSTERING ORDER BY`: Define clustering column sort order
+  ```sql
+  WITH CLUSTERING ORDER BY (created_at DESC, id ASC)
+  ```
+
+### ALTER TABLE
+
+Modifies an existing table structure.
+
+**Syntax**:
+
+```sql
+ALTER TABLE [keyspace_name.]table_name
+  ADD column_name data_type
+  | DROP column_name
+  | RENAME old_name TO new_name
+  | WITH property = value;
+```
+
+**Example**:
+
+```sql
+-- Add column
+ALTER TABLE users ADD phone VARCHAR;
+
+-- Add multiple columns
+ALTER TABLE users ADD (address VARCHAR, city VARCHAR);
+
+-- Drop column
+ALTER TABLE users DROP phone;
+
+-- Rename column
+ALTER TABLE users RENAME email TO email_address;
+
+-- Modify properties
+ALTER TABLE users WITH default_time_to_live = 3600;
+```
+
+**Limitations**:
+- Cannot alter primary key columns
+- Cannot change column types
+- Cannot add/remove columns from primary key
+
+### DROP TABLE
+
+Deletes a table.
+
+**Syntax**:
+
+```sql
+DROP TABLE [IF EXISTS] [keyspace_name.]table_name;
+```
+
+**Example**:
+
+```sql
+DROP TABLE users;
+DROP TABLE IF EXISTS temp_table;
+```
+
+### CREATE INDEX
+
+Creates a secondary index on a column.
+
+**Syntax**:
+
+```sql
+CREATE INDEX [IF NOT EXISTS] [index_name]
+ON [keyspace_name.]table_name (column_name)
+[WITH transactions = {'enabled': true}];
+```
+
+**Example**:
+
+```sql
+-- Table must have transactions enabled
+CREATE TABLE users (
+  user_id INT PRIMARY KEY,
+  email VARCHAR,
+  status VARCHAR
+) WITH transactions = {'enabled': true};
+
+-- Create index
+CREATE INDEX ON users (email);
+CREATE INDEX user_status_idx ON users (status);
+
+-- Create index if not exists
+CREATE INDEX IF NOT EXISTS email_idx ON users (email);
+```
+
+**Requirements**:
+- Table must have `transactions = {'enabled': true}`
+- Cannot index collection columns
+- Cannot index primary key columns
+
+### DROP INDEX
+
+Deletes a secondary index.
+
+**Syntax**:
+
+```sql
+DROP INDEX [IF EXISTS] [keyspace_name.]index_name;
+```
+
+**Example**:
+
+```sql
+DROP INDEX user_status_idx;
+DROP INDEX IF EXISTS email_idx;
+```
+
+### TRUNCATE
+
+Removes all rows from a table.
+
+**Syntax**:
+
+```sql
+TRUNCATE [TABLE] [keyspace_name.]table_name;
+```
+
+**Example**:
+
+```sql
+TRUNCATE users;
+TRUNCATE TABLE temp_data;
+```
+
+## Data Manipulation Language (DML)
+
+### INSERT
+
+Inserts a new row into a table.
+
+**Syntax**:
+
+```sql
+INSERT INTO [keyspace_name.]table_name (column1, column2, ...)
+VALUES (value1, value2, ...)
+[IF NOT EXISTS]
+[USING TTL seconds [AND TIMESTAMP microseconds]];
+```
+
+**Example**:
+
+```sql
+-- Basic insert
+INSERT INTO users (user_id, name, email)
+VALUES (1, 'John Doe', 'john@example.com');
+
+-- Insert with IF NOT EXISTS
+INSERT INTO users (user_id, name, email)
+VALUES (1, 'Jane Doe', 'jane@example.com')
+IF NOT EXISTS;
+
+-- Insert with TTL (time to live)
+INSERT INTO sessions (session_id, user_id, data)
+VALUES ('abc123', 1, '{"active": true}')
+USING TTL 3600;  -- Expire after 1 hour
+
+-- Insert with timestamp
+INSERT INTO events (id, event_time, data)
+VALUES (1, '2024-01-15 10:30:00', 'Event data')
+USING TIMESTAMP 1705318200000000;
+
+-- Insert collections
+INSERT INTO user_preferences (user_id, settings, tags)
+VALUES (1, {'theme': 'dark', 'lang': 'en'}, {'premium', 'verified'});
+
+-- Insert with expressions
+INSERT INTO measurements (id, value, negative_value)
+VALUES (1, 10, -10);
+```
+
+### UPDATE
+
+Modifies existing rows in a table.
+
+**Syntax**:
+
+```sql
+UPDATE [keyspace_name.]table_name
+[USING TTL seconds [AND TIMESTAMP microseconds]]
+SET column1 = value1 [, column2 = value2, ...]
+WHERE condition
+[IF condition];
+```
+
+**Example**:
+
+```sql
+-- Basic update
+UPDATE users SET name = 'Jane Smith' WHERE user_id = 1;
+
+-- Update multiple columns
+UPDATE users 
+SET name = 'John Smith', email = 'john.smith@example.com'
+WHERE user_id = 1;
+
+-- Update with TTL
+UPDATE sessions USING TTL 1800
+SET data = '{"active": true}'
+WHERE session_id = 'abc123';
+
+-- Conditional update
+UPDATE users SET email = 'new@example.com'
+WHERE user_id = 1
+IF email = 'old@example.com';
+
+-- Update map element
+UPDATE user_preferences 
+SET settings['theme'] = 'light'
+WHERE user_id = 1;
+
+-- Update list (replace)
+UPDATE playlists 
+SET songs = ['song1', 'song2', 'song3']
+WHERE playlist_id = 1;
+
+-- Update counter
+UPDATE page_views 
+SET view_count = view_count + 1
+WHERE page_id = 1;
+```
+
+### DELETE
+
+Removes rows or specific columns from a table.
+
+**Syntax**:
+
+```sql
+DELETE [column1, column2, ...] FROM [keyspace_name.]table_name
+[USING TIMESTAMP microseconds]
+WHERE condition
+[IF condition];
+```
+
+**Example**:
+
+```sql
+-- Delete entire row
+DELETE FROM users WHERE user_id = 1;
+
+-- Delete specific columns
+DELETE email, phone FROM users WHERE user_id = 1;
+
+-- Delete with timestamp
+DELETE FROM events USING TIMESTAMP 1705318200000000
+WHERE event_id = 1;
+
+-- Conditional delete
+DELETE FROM users WHERE user_id = 1
+IF status = 'inactive';
+
+-- Delete map element
+DELETE settings['theme'] FROM user_preferences WHERE user_id = 1;
+
+-- Delete multiple map elements
+DELETE settings['theme'], settings['lang'] 
+FROM user_preferences WHERE user_id = 1;
+
+-- Delete list element by index
+DELETE songs[0] FROM playlists WHERE playlist_id = 1;
+
+-- Delete range of rows
+DELETE FROM events
+WHERE user_id = 1 AND event_time >= '2024-01-01' AND event_time < '2024-02-01';
+```
+
+### SELECT
+
+Retrieves rows from a table.
+
+**Syntax**:
+
+```sql
+SELECT [DISTINCT] column1, column2, ... | *
+FROM [keyspace_name.]table_name
+[WHERE condition]
+[ORDER BY column [ASC|DESC]]
+[LIMIT n]
+[ALLOW FILTERING];
+```
+
+**Example**:
+
+```sql
+-- Select all columns
+SELECT * FROM users;
+
+-- Select specific columns
+SELECT user_id, name, email FROM users;
+
+-- Select with WHERE clause
+SELECT * FROM users WHERE user_id = 1;
+
+-- Select with partition key and clustering key
+SELECT * FROM events
+WHERE user_id = 1 AND event_type = 'login'
+AND event_time >= '2024-01-01' AND event_time < '2024-02-01';
+
+-- Select with ORDER BY (clustering columns only)
+SELECT * FROM events
+WHERE user_id = 1 AND event_type = 'login'
+ORDER BY event_time DESC;
+
+-- Select with LIMIT
+SELECT * FROM users LIMIT 10;
+
+-- Select DISTINCT
+SELECT DISTINCT category FROM products;
+
+-- Select with ALLOW FILTERING (scan operation)
+SELECT * FROM users WHERE email = 'john@example.com' ALLOW FILTERING;
+
+-- Select with IN clause
+SELECT * FROM users WHERE user_id IN (1, 2, 3, 4, 5);
+
+-- Select with functions
+SELECT user_id, name, toTimestamp(now()) as query_time FROM users;
+
+-- Select with aggregation
+SELECT COUNT(*) FROM users;
+SELECT category, COUNT(*) FROM products GROUP BY category;
+SELECT MIN(price), MAX(price), AVG(price) FROM products;
+```
+
+**WHERE Clause Operators**:
+
+- `=` - Equality
+- `>`, `>=`, `<`, `<=` - Comparison (clustering columns only)
+- `IN` - Multiple values
+- `CONTAINS` - Collection membership (with ALLOW FILTERING)
+- `CONTAINS KEY` - Map key existence (with ALLOW FILTERING)
+
+**Aggregate Functions**:
+
+- `COUNT(*)` or `COUNT(column)` - Row count
+- `SUM(column)` - Sum of values
+- `MIN(column)` - Minimum value
+- `MAX(column)` - Maximum value  
+- `AVG(column)` - Average value
+
+## Batch Operations
+
+### BATCH
+
+Executes multiple DML statements atomically.
+
+**Syntax**:
+
+```sql
+BEGIN [UNLOGGED] BATCH
+  [USING TIMESTAMP microseconds]
+  INSERT/UPDATE/DELETE statement;
+  INSERT/UPDATE/DELETE statement;
+  ...
+APPLY BATCH;
+```
+
+**Example**:
+
+```sql
+-- Basic batch
+BEGIN BATCH
+  INSERT INTO users (user_id, name) VALUES (1, 'Alice');
+  INSERT INTO users (user_id, name) VALUES (2, 'Bob');
+  UPDATE users SET email = 'alice@example.com' WHERE user_id = 1;
+APPLY BATCH;
+
+-- Batch with timestamp
+BEGIN BATCH USING TIMESTAMP 1705318200000000
+  INSERT INTO events (id, data) VALUES (1, 'Event 1');
+  INSERT INTO events (id, data) VALUES (2, 'Event 2');
+APPLY BATCH;
+
+-- Unlogged batch (better performance, no atomicity)
+BEGIN UNLOGGED BATCH
+  INSERT INTO logs (id, message) VALUES (1, 'Log entry 1');
+  INSERT INTO logs (id, message) VALUES (2, 'Log entry 2');
+APPLY BATCH;
+```
+
+**Batch Types**:
+
+- **LOGGED** (default): Atomic batch with performance overhead
+- **UNLOGGED**: Non-atomic batch with better performance
+
+**Best Practices**:
+
+- Keep batch size small (< 100 statements)
+- Use UNLOGGED for same-partition writes
+- Avoid cross-partition batches when possible
+
+## Prepared Statements
+
+### Bind Variables
+
+Use placeholders for values to improve performance and security.
+
+**Syntax**:
+
+```sql
+-- Positional parameters
+SELECT * FROM users WHERE user_id = ?;
+
+-- Named parameters
+SELECT * FROM users WHERE user_id = :user_id AND status = :status;
+```
+
+**Example (Java)**:
+
+```java
+// Prepare statement
+PreparedStatement ps = session.prepare(
+  "INSERT INTO users (user_id, name, email) VALUES (?, ?, ?)"
+);
+
+// Bind and execute
+BoundStatement bound = ps.bind(1, "John Doe", "john@example.com");
+session.execute(bound);
+
+// Named parameters
+PreparedStatement ps2 = session.prepare(
+  "SELECT * FROM users WHERE user_id = :id"
+);
+BoundStatement bound2 = ps2.bind().setInt("id", 1);
+ResultSet rs = session.execute(bound2);
+```
+
+**Example (Python)**:
+
+```python
+# Prepare statement
+prepared = session.prepare(
+    "INSERT INTO users (user_id, name, email) VALUES (?, ?, ?)"
+)
+
+# Bind and execute
+session.execute(prepared, (1, 'John Doe', 'john@example.com'))
+
+# Named parameters
+prepared2 = session.prepare(
+    "SELECT * FROM users WHERE user_id = :id"
+)
+rows = session.execute(prepared2, {'id': 1})
+```
+
+## Transaction Control
+
+For tables with transactions enabled:
+
+```sql
+-- Create transactional table
+CREATE TABLE accounts (
+  account_id INT PRIMARY KEY,
+  balance DECIMAL
+) WITH transactions = {'enabled': true};
+
+-- Transactions are automatic for single statements
+UPDATE accounts SET balance = balance - 100 WHERE account_id = 1;
+
+-- Use batch for multi-statement transactions
+BEGIN BATCH
+  UPDATE accounts SET balance = balance - 100 WHERE account_id = 1;
+  UPDATE accounts SET balance = balance + 100 WHERE account_id = 2;
+APPLY BATCH;
+```
+
+## Common Patterns
+
+### Time-Series Data
+
+```sql
+CREATE TABLE sensor_data (
+  sensor_id INT,
+  reading_time TIMESTAMP,
+  temperature DOUBLE,
+  humidity DOUBLE,
+  PRIMARY KEY ((sensor_id), reading_time)
+)
+WITH CLUSTERING ORDER BY (reading_time DESC)
+AND default_time_to_live = 2592000;  -- 30 days
+
+INSERT INTO sensor_data (sensor_id, reading_time, temperature, humidity)
+VALUES (1, toTimestamp(now()), 72.5, 45.2);
+
+SELECT * FROM sensor_data
+WHERE sensor_id = 1
+AND reading_time >= '2024-01-01'
+ORDER BY reading_time DESC
+LIMIT 100;
+```
+
+### User Sessions
+
+```sql
+CREATE TABLE user_sessions (
+  session_id UUID PRIMARY KEY,
+  user_id INT,
+  created_at TIMESTAMP,
+  data JSONB
+);
+
+INSERT INTO user_sessions (session_id, user_id, created_at, data)
+VALUES (uuid(), 1, toTimestamp(now()), '{"ip": "192.168.1.1"}')
+USING TTL 3600;  -- 1 hour session
+```
+
+### Counters and Statistics
+
+```sql
+CREATE TABLE page_stats (
+  page_id INT PRIMARY KEY,
+  views COUNTER,
+  likes COUNTER
+);
+
+UPDATE page_stats SET views = views + 1 WHERE page_id = 1;
+UPDATE page_stats SET likes = likes + 1 WHERE page_id = 1;
+
+SELECT * FROM page_stats WHERE page_id = 1;
+```
+
+## Best Practices
+
+1. **Always specify partition key in WHERE**: Avoid full table scans
+2. **Use prepared statements**: Better performance and security
+3. **Limit batch sizes**: Keep batches small for better performance
+4. **Design for query patterns**: Model data based on how you'll query it
+5. **Use TTL for temporary data**: Automatic cleanup
+6. **Enable transactions only when needed**: Adds overhead
+7. **Use ALLOW FILTERING sparingly**: Can cause performance issues

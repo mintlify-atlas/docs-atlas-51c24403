@@ -1,0 +1,496 @@
+---
+title: YSQL Functions
+headerTitle: Built-in Functions and Operators
+linkTitle: Functions
+description: Reference for built-in SQL functions and operators in YSQL
+---
+
+YSQL supports all PostgreSQL 15 built-in functions and operators, plus YugabyteDB-specific extensions for distributed database operations.
+
+## Aggregate Functions
+
+Aggregate functions compute single results from sets of input values.
+
+### Statistical Aggregates
+
+<ParamField path="count" type="count(*)">
+  Returns the number of rows.
+</ParamField>
+
+<ParamField path="avg" type="avg(expression)">
+  Returns the average of all non-null input values.
+</ParamField>
+
+<ParamField path="sum" type="sum(expression)">
+  Returns the sum of all non-null input values.
+</ParamField>
+
+<ParamField path="min" type="min(expression)">
+  Returns the minimum value across all non-null input values.
+</ParamField>
+
+<ParamField path="max" type="max(expression)">
+  Returns the maximum value across all non-null input values.
+</ParamField>
+
+```sql
+SELECT 
+  COUNT(*) AS total_orders,
+  AVG(total) AS avg_order_value,
+  SUM(total) AS total_revenue,
+  MIN(order_date) AS first_order,
+  MAX(order_date) AS last_order
+FROM orders;
+```
+
+### String Aggregates
+
+<ParamField path="string_agg" type="string_agg(expression, delimiter)">
+  Concatenates input values into a string, separated by delimiter.
+</ParamField>
+
+<ParamField path="array_agg" type="array_agg(expression)">
+  Collects all input values into an array.
+</ParamField>
+
+```sql
+SELECT 
+  customer_id,
+  string_agg(product_name, ', ' ORDER BY product_name) AS products,
+  array_agg(order_id ORDER BY order_date) AS order_ids
+FROM order_items
+GROUP BY customer_id;
+```
+
+### Statistical Functions
+
+```sql
+SELECT 
+  stddev(price) AS standard_deviation,
+  variance(price) AS variance,
+  stddev_pop(price) AS population_stddev,
+  var_pop(price) AS population_variance
+FROM products;
+```
+
+### JSON Aggregates
+
+```sql
+SELECT 
+  jsonb_agg(row_to_json(t)) AS json_array,
+  jsonb_object_agg(name, value) AS json_object
+FROM (
+  SELECT name, value FROM metrics
+) t;
+```
+
+## Window Functions
+
+Window functions perform calculations across rows related to the current row.
+
+### Ranking Functions
+
+<ParamField path="row_number" type="row_number()">
+  Assigns a unique sequential number to each row within a partition.
+</ParamField>
+
+<ParamField path="rank" type="rank()">
+  Assigns a rank with gaps for tied values.
+</ParamField>
+
+<ParamField path="dense_rank" type="dense_rank()">
+  Assigns a rank without gaps for tied values.
+</ParamField>
+
+<ParamField path="ntile" type="ntile(num_buckets)">
+  Divides rows into num_buckets groups.
+</ParamField>
+
+```sql
+SELECT 
+  product_name,
+  price,
+  ROW_NUMBER() OVER (ORDER BY price DESC) AS row_num,
+  RANK() OVER (ORDER BY price DESC) AS rank,
+  DENSE_RANK() OVER (ORDER BY price DESC) AS dense_rank,
+  NTILE(4) OVER (ORDER BY price DESC) AS quartile
+FROM products;
+```
+
+### Value Functions
+
+```sql
+SELECT 
+  order_id,
+  order_date,
+  total,
+  LAG(total) OVER (ORDER BY order_date) AS prev_order_total,
+  LEAD(total) OVER (ORDER BY order_date) AS next_order_total,
+  FIRST_VALUE(total) OVER (ORDER BY order_date) AS first_order_total,
+  LAST_VALUE(total) OVER (
+    ORDER BY order_date 
+    ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+  ) AS last_order_total
+FROM orders;
+```
+
+### Aggregate Window Functions
+
+```sql
+SELECT 
+  order_date,
+  total,
+  SUM(total) OVER (
+    ORDER BY order_date 
+    ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+  ) AS running_total,
+  AVG(total) OVER (
+    ORDER BY order_date 
+    ROWS BETWEEN 6 PRECEDING AND CURRENT ROW
+  ) AS moving_avg_7day
+FROM orders
+ORDER BY order_date;
+```
+
+## String Functions
+
+### String Manipulation
+
+```sql
+SELECT 
+  -- Case conversion
+  UPPER('hello') AS upper_case,           -- HELLO
+  LOWER('WORLD') AS lower_case,           -- world
+  INITCAP('hello world') AS title_case,   -- Hello World
+  
+  -- Concatenation
+  'Hello' || ' ' || 'World' AS concat,    -- Hello World
+  CONCAT('Hello', ' ', 'World') AS concat_fn,
+  
+  -- Substring
+  SUBSTRING('Hello World' FROM 1 FOR 5) AS substr,  -- Hello
+  LEFT('Hello World', 5) AS left_chars,    -- Hello
+  RIGHT('Hello World', 5) AS right_chars,  -- World
+  
+  -- Padding
+  LPAD('123', 6, '0') AS left_pad,        -- 000123
+  RPAD('123', 6, '0') AS right_pad,       -- 123000
+  
+  -- Trimming
+  TRIM('  hello  ') AS trimmed,           -- hello
+  LTRIM('  hello  ') AS left_trim,        -- 'hello  '
+  RTRIM('  hello  ') AS right_trim;       -- '  hello'
+```
+
+### String Search and Replace
+
+```sql
+SELECT 
+  -- Position
+  POSITION('world' IN 'hello world') AS pos,  -- 7
+  
+  -- Replace
+  REPLACE('hello world', 'world', 'universe') AS replaced,
+  
+  -- Regular expressions
+  REGEXP_REPLACE('hello123world', '[0-9]+', 'X') AS regex_replace,
+  REGEXP_MATCHES('test123demo456', '[0-9]+', 'g') AS regex_matches,
+  
+  -- Pattern matching
+  'hello' LIKE 'h%' AS like_result,       -- true
+  'hello' SIMILAR TO 'h.*' AS similar_to, -- true
+  'hello' ~ '^h.*o$' AS regex_match;      -- true
+```
+
+### String Analysis
+
+```sql
+SELECT 
+  LENGTH('hello') AS str_length,          -- 5
+  CHAR_LENGTH('hello') AS char_length,    -- 5
+  BIT_LENGTH('hello') AS bit_length,      -- 40
+  OCTET_LENGTH('hello') AS octet_length;  -- 5
+```
+
+## Date/Time Functions
+
+### Current Date/Time
+
+```sql
+SELECT 
+  CURRENT_DATE AS current_date,
+  CURRENT_TIME AS current_time,
+  CURRENT_TIMESTAMP AS current_timestamp,
+  NOW() AS now,
+  CLOCK_TIMESTAMP() AS clock_time,
+  TRANSACTION_TIMESTAMP() AS txn_time;
+```
+
+### Date/Time Extraction
+
+<ParamField path="extract" type="extract(field FROM source)">
+  Extracts a specific field (year, month, day, hour, etc.) from a date/time value.
+</ParamField>
+
+```sql
+SELECT 
+  EXTRACT(YEAR FROM TIMESTAMP '2024-03-15 14:30:00') AS year,
+  EXTRACT(MONTH FROM TIMESTAMP '2024-03-15 14:30:00') AS month,
+  EXTRACT(DAY FROM TIMESTAMP '2024-03-15 14:30:00') AS day,
+  EXTRACT(HOUR FROM TIMESTAMP '2024-03-15 14:30:00') AS hour,
+  EXTRACT(DOW FROM TIMESTAMP '2024-03-15 14:30:00') AS day_of_week,
+  EXTRACT(EPOCH FROM TIMESTAMP '2024-03-15 14:30:00') AS unix_time;
+```
+
+### Date/Time Arithmetic
+
+```sql
+SELECT 
+  -- Addition
+  CURRENT_DATE + INTERVAL '7 days' AS next_week,
+  CURRENT_DATE + INTERVAL '1 month' AS next_month,
+  
+  -- Subtraction
+  CURRENT_DATE - INTERVAL '1 year' AS last_year,
+  
+  -- Age calculation
+  AGE(TIMESTAMP '2024-03-15', TIMESTAMP '2020-01-01') AS age,
+  
+  -- Date difference
+  DATE '2024-12-31' - DATE '2024-01-01' AS days_diff;
+```
+
+### Date/Time Formatting
+
+```sql
+SELECT 
+  TO_CHAR(CURRENT_TIMESTAMP, 'YYYY-MM-DD HH24:MI:SS') AS formatted_timestamp,
+  TO_CHAR(CURRENT_DATE, 'Mon DD, YYYY') AS formatted_date,
+  TO_DATE('2024-03-15', 'YYYY-MM-DD') AS parsed_date,
+  TO_TIMESTAMP('2024-03-15 14:30:00', 'YYYY-MM-DD HH24:MI:SS') AS parsed_timestamp;
+```
+
+### Date/Time Truncation
+
+```sql
+SELECT 
+  DATE_TRUNC('year', CURRENT_TIMESTAMP) AS year_start,
+  DATE_TRUNC('month', CURRENT_TIMESTAMP) AS month_start,
+  DATE_TRUNC('day', CURRENT_TIMESTAMP) AS day_start,
+  DATE_TRUNC('hour', CURRENT_TIMESTAMP) AS hour_start;
+```
+
+## Mathematical Functions
+
+### Basic Math
+
+```sql
+SELECT 
+  ABS(-42) AS absolute,              -- 42
+  CEIL(4.3) AS ceiling,              -- 5
+  FLOOR(4.8) AS floor,               -- 4
+  ROUND(4.567, 2) AS rounded,        -- 4.57
+  TRUNC(4.567, 2) AS truncated,      -- 4.56
+  MOD(10, 3) AS modulo,              -- 1
+  POWER(2, 10) AS power,             -- 1024
+  SQRT(16) AS square_root,           -- 4
+  CBRT(27) AS cube_root;             -- 3
+```
+
+### Trigonometric Functions
+
+```sql
+SELECT 
+  SIN(PI() / 2) AS sine,
+  COS(0) AS cosine,
+  TAN(PI() / 4) AS tangent,
+  ASIN(1) AS arcsine,
+  ACOS(0) AS arccosine,
+  ATAN(1) AS arctangent;
+```
+
+### Random and Logarithm
+
+```sql
+SELECT 
+  RANDOM() AS random_0_to_1,
+  FLOOR(RANDOM() * 100)::INT AS random_0_to_99,
+  LN(2.718281828) AS natural_log,
+  LOG(10, 100) AS log_base_10,
+  EXP(1) AS exponential;
+```
+
+## Conditional Functions
+
+### CASE Expression
+
+```sql
+SELECT 
+  product_name,
+  price,
+  CASE 
+    WHEN price < 10 THEN 'Budget'
+    WHEN price < 50 THEN 'Standard'
+    WHEN price < 100 THEN 'Premium'
+    ELSE 'Luxury'
+  END AS price_category
+FROM products;
+```
+
+### COALESCE and NULLIF
+
+<ParamField path="coalesce" type="coalesce(value1, value2, ...)">
+  Returns the first non-null value in the list.
+</ParamField>
+
+<ParamField path="nullif" type="nullif(value1, value2)">
+  Returns NULL if value1 equals value2, otherwise returns value1.
+</ParamField>
+
+```sql
+SELECT 
+  COALESCE(email, phone, 'No contact') AS contact_info,
+  NULLIF(status, '') AS status_or_null,
+  GREATEST(10, 20, 30) AS maximum,
+  LEAST(10, 20, 30) AS minimum
+FROM contacts;
+```
+
+## JSON Functions
+
+### JSON Extraction
+
+```sql
+SELECT 
+  data->>'name' AS name,                    -- Text extraction
+  data->'address'->>'city' AS city,         -- Nested extraction
+  data->'tags'->0 AS first_tag,             -- Array element
+  jsonb_array_length(data->'tags') AS tag_count
+FROM users;
+```
+
+### JSON Construction
+
+```sql
+SELECT 
+  jsonb_build_object(
+    'id', user_id,
+    'name', username,
+    'email', email
+  ) AS user_json,
+  jsonb_build_array(1, 2, 3, 4, 5) AS number_array
+FROM users;
+```
+
+### JSON Operators
+
+```sql
+SELECT * FROM users
+WHERE 
+  data @> '{"status": "active"}'::jsonb          -- Contains
+  AND data ? 'email'                               -- Key exists
+  AND data->'age' > '25'::jsonb;                   -- Comparison
+```
+
+## Array Functions
+
+```sql
+SELECT 
+  -- Array construction
+  ARRAY[1, 2, 3, 4, 5] AS int_array,
+  
+  -- Array operations
+  array_length(ARRAY[1, 2, 3], 1) AS arr_length,
+  array_append(ARRAY[1, 2, 3], 4) AS appended,
+  array_prepend(0, ARRAY[1, 2, 3]) AS prepended,
+  array_cat(ARRAY[1, 2], ARRAY[3, 4]) AS concatenated,
+  
+  -- Array search
+  1 = ANY(ARRAY[1, 2, 3]) AS contains_one,
+  ARRAY[1, 2] <@ ARRAY[1, 2, 3, 4] AS is_subset,
+  
+  -- Array to string
+  array_to_string(ARRAY['a', 'b', 'c'], ',') AS joined;
+```
+
+## System Information Functions
+
+```sql
+SELECT 
+  version() AS pg_version,
+  current_database() AS db_name,
+  current_schema() AS schema_name,
+  current_user AS current_user,
+  session_user AS session_user,
+  inet_client_addr() AS client_ip,
+  inet_server_addr() AS server_ip,
+  pg_backend_pid() AS backend_pid;
+```
+
+## YugabyteDB-Specific Functions
+
+### Distribution Functions
+
+```sql
+-- Get tablet information
+SELECT yb_hash_code(user_id) AS hash_code FROM users;
+
+-- Get server UUID
+SELECT yb_server_uuid();
+
+-- Get cluster UUID  
+SELECT yb_cluster_uuid();
+```
+
+### Metrics Functions
+
+```sql
+-- Get connection statistics (requires yb_pg_metrics extension)
+CREATE EXTENSION IF NOT EXISTS yb_pg_metrics;
+
+SELECT * FROM yb_pg_stat_get_queries();
+```
+
+## Type Conversion Functions
+
+```sql
+SELECT 
+  -- Casting
+  '123'::INTEGER AS to_int,
+  123::TEXT AS to_text,
+  CAST('2024-03-15' AS DATE) AS to_date,
+  
+  -- Type checking
+  pg_typeof(123) AS type_of_int,
+  pg_typeof('text') AS type_of_text,
+  pg_typeof(ARRAY[1,2,3]) AS type_of_array;
+```
+
+## Cryptographic Functions
+
+```sql
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+SELECT 
+  MD5('password') AS md5_hash,
+  encode(digest('password', 'sha256'), 'hex') AS sha256_hash,
+  crypt('password', gen_salt('bf')) AS bcrypt_hash,
+  gen_random_uuid() AS random_uuid;
+```
+
+## Text Search Functions
+
+```sql
+SELECT 
+  to_tsvector('english', 'The quick brown fox') AS vector,
+  to_tsquery('english', 'fox & quick') AS query,
+  to_tsvector('english', 'The quick brown fox') @@ 
+    to_tsquery('english', 'fox & quick') AS matches;
+```
+
+## Additional Resources
+
+- [PostgreSQL Functions Documentation](https://www.postgresql.org/docs/15/functions.html)
+- [YSQL Data Types](/api/ysql/data-types)
+- [YSQL Statements](/api/ysql/statements)
+- [YSQL Extensions](/api/ysql/extensions)

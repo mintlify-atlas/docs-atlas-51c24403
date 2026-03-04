@@ -1,0 +1,424 @@
+---
+title: Authorization
+description: Implement role-based access control (RBAC) to manage database permissions in YugabyteDB
+---
+
+Authorization determines what authenticated users can do within your YugabyteDB cluster. YugabyteDB implements a comprehensive role-based access control (RBAC) model based on PostgreSQL's privilege system.
+
+## RBAC Model Overview
+
+YugabyteDB's authorization model consists of three main components:
+
+- **Roles**: Users and groups that can be granted privileges
+- **Resources**: Database objects (databases, tables, schemas, functions)
+- **Privileges**: Specific permissions on resources (SELECT, INSERT, CREATE, etc.)
+
+## Roles
+
+Roles represent both individual users and groups. A role with the LOGIN privilege is considered a user.
+
+### Built-in Roles
+
+YugabyteDB provides several predefined roles:
+
+| Role | Description |
+|------|-------------|
+| `yugabyte` | Default superuser created during cluster initialization |
+| `postgres` | PostgreSQL-compatible superuser role |
+| `yb_db_admin` | Allows non-superusers to create tablespaces and perform privileged operations |
+| `yb_extension` | Allows non-superusers to create PostgreSQL extensions |
+| `yb_fdw` | Allows non-superusers to manage foreign data wrappers |
+
+```sql
+-- View all roles
+\du
+
+-- View roles with detailed information
+SELECT rolname, rolsuper, rolcanlogin, rolcreaterole, rolcreatedb 
+FROM pg_roles;
+```
+
+### Create Roles
+
+Create roles with specific attributes:
+
+```sql
+-- Create a basic login user
+CREATE ROLE developer WITH LOGIN PASSWORD 'dev_password';
+
+-- Create a role with multiple attributes
+CREATE ROLE app_admin WITH 
+  LOGIN 
+  CREATEDB 
+  CREATEROLE 
+  PASSWORD 'admin_password';
+
+-- Create a group role (no login)
+CREATE ROLE readonly_group;
+
+-- Create a superuser (requires superuser privilege)
+CREATE ROLE dba WITH LOGIN SUPERUSER PASSWORD 'dba_password';
+```
+
+### Role Attributes
+
+Roles can have the following attributes:
+
+- **LOGIN**: Allows the role to connect to the database
+- **SUPERUSER**: Grants all privileges, bypasses all permission checks
+- **CREATEDB**: Allows creating databases
+- **CREATEROLE**: Allows creating and managing other roles
+- **REPLICATION**: Allows replication connections
+- **BYPASSRLS**: Bypasses row-level security policies
+- **INHERIT**: Automatically inherits privileges from granted roles (default)
+
+### Modify Roles
+
+```sql
+-- Change password
+ALTER ROLE developer PASSWORD 'new_password';
+
+-- Grant superuser privilege
+ALTER ROLE developer WITH SUPERUSER;
+
+-- Revoke superuser privilege
+ALTER ROLE developer WITH NOSUPERUSER;
+
+-- Disable login
+ALTER ROLE developer WITH NOLOGIN;
+
+-- Enable login
+ALTER ROLE developer WITH LOGIN;
+
+-- Set connection limit
+ALTER ROLE developer CONNECTION LIMIT 10;
+```
+
+### Role Membership
+
+Roles can be members of other roles, creating a hierarchy:
+
+```sql
+-- Grant role membership
+GRANT readonly_group TO developer;
+GRANT app_admin TO dba;
+
+-- Revoke role membership
+REVOKE readonly_group FROM developer;
+
+-- View role memberships
+SELECT 
+  r.rolname as role,
+  m.rolname as member
+FROM pg_auth_members am
+JOIN pg_roles r ON r.oid = am.roleid
+JOIN pg_roles m ON m.oid = am.member;
+```
+
+## Privileges
+
+Privileges control what operations roles can perform on database objects.
+
+### Database Privileges
+
+```sql
+-- Grant database connection
+GRANT CONNECT ON DATABASE mydb TO developer;
+
+-- Grant database creation privileges
+GRANT CREATE ON DATABASE mydb TO developer;
+
+-- Grant temporary table creation
+GRANT TEMP ON DATABASE mydb TO developer;
+
+-- Revoke privileges
+REVOKE CONNECT ON DATABASE mydb FROM developer;
+
+-- Grant all database privileges
+GRANT ALL PRIVILEGES ON DATABASE mydb TO app_admin;
+```
+
+### Schema Privileges
+
+```sql
+-- Grant schema usage
+GRANT USAGE ON SCHEMA public TO developer;
+
+-- Grant schema creation
+GRANT CREATE ON SCHEMA public TO developer;
+
+-- Grant all schema privileges
+GRANT ALL PRIVILEGES ON SCHEMA public TO app_admin;
+```
+
+### Table Privileges
+
+```sql
+-- Grant SELECT privilege
+GRANT SELECT ON TABLE employees TO developer;
+
+-- Grant multiple privileges
+GRANT SELECT, INSERT, UPDATE ON TABLE employees TO developer;
+
+-- Grant privileges on all tables in schema
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO readonly_group;
+
+-- Grant privileges on future tables
+ALTER DEFAULT PRIVILEGES IN SCHEMA public 
+GRANT SELECT ON TABLES TO readonly_group;
+
+-- Grant all table privileges
+GRANT ALL PRIVILEGES ON TABLE employees TO app_admin;
+
+-- Grant with grant option (allows granting to others)
+GRANT SELECT ON TABLE employees TO developer WITH GRANT OPTION;
+```
+
+### Column-Level Privileges
+
+Grant privileges on specific columns:
+
+```sql
+-- Grant SELECT on specific columns
+GRANT SELECT (id, name, email) ON TABLE employees TO developer;
+
+-- Grant UPDATE on specific columns
+GRANT UPDATE (email, phone) ON TABLE employees TO developer;
+```
+
+### Function and Procedure Privileges
+
+```sql
+-- Grant execute on function
+GRANT EXECUTE ON FUNCTION calculate_salary(int) TO developer;
+
+-- Grant execute on all functions
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO developer;
+```
+
+### Sequence Privileges
+
+```sql
+-- Grant sequence usage
+GRANT USAGE ON SEQUENCE employee_id_seq TO developer;
+
+-- Grant update (allows nextval, setval)
+GRANT UPDATE ON SEQUENCE employee_id_seq TO developer;
+
+-- Grant all sequence privileges
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO developer;
+```
+
+## Common Access Patterns
+
+### Read-Only User
+
+Create a user with read-only access to specific tables:
+
+```sql
+-- Create role
+CREATE ROLE readonly_user WITH LOGIN PASSWORD 'readonly_pass';
+
+-- Grant connection
+GRANT CONNECT ON DATABASE mydb TO readonly_user;
+
+-- Grant schema access
+GRANT USAGE ON SCHEMA public TO readonly_user;
+
+-- Grant SELECT on all existing tables
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO readonly_user;
+
+-- Grant SELECT on future tables
+ALTER DEFAULT PRIVILEGES IN SCHEMA public 
+GRANT SELECT ON TABLES TO readonly_user;
+```
+
+### Application User
+
+Create an application user with read/write access:
+
+```sql
+-- Create role
+CREATE ROLE app_user WITH LOGIN PASSWORD 'app_pass';
+
+-- Grant database access
+GRANT CONNECT ON DATABASE mydb TO app_user;
+GRANT USAGE, CREATE ON SCHEMA public TO app_user;
+
+-- Grant table privileges
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO app_user;
+GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO app_user;
+
+-- Set default privileges for new objects
+ALTER DEFAULT PRIVILEGES IN SCHEMA public 
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO app_user;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA public 
+GRANT USAGE ON SEQUENCES TO app_user;
+```
+
+### DBA User
+
+Create a database administrator without full superuser privileges:
+
+```sql
+-- Create role with elevated privileges
+CREATE ROLE db_admin WITH 
+  LOGIN 
+  CREATEDB 
+  CREATEROLE 
+  PASSWORD 'dba_pass';
+
+-- Grant membership to yb_db_admin
+GRANT yb_db_admin TO db_admin;
+
+-- Grant all privileges on database
+GRANT ALL PRIVILEGES ON DATABASE mydb TO db_admin;
+```
+
+## Row-Level Security (RLS)
+
+Row-level security allows you to restrict which rows users can access:
+
+```sql
+-- Enable RLS on a table
+ALTER TABLE employees ENABLE ROW LEVEL SECURITY;
+
+-- Create policy: users can only see their own rows
+CREATE POLICY employee_self_policy ON employees
+  FOR ALL
+  TO app_user
+  USING (user_id = current_user);
+
+-- Create policy: managers can see their team
+CREATE POLICY manager_policy ON employees
+  FOR SELECT
+  TO manager_role
+  USING (manager_id = current_user);
+
+-- Allow admins to see all rows
+CREATE POLICY admin_all_policy ON employees
+  FOR ALL
+  TO app_admin
+  USING (true);
+
+-- View policies
+SELECT * FROM pg_policies WHERE tablename = 'employees';
+```
+
+<Warning>
+  Superusers and table owners bypass row-level security by default. Use `ALTER TABLE ... FORCE ROW LEVEL SECURITY` to enforce RLS even for table owners.
+</Warning>
+
+## View Privileges
+
+Check current privileges on database objects:
+
+```sql
+-- View table privileges
+SELECT 
+  grantor,
+  grantee,
+  table_schema,
+  table_name,
+  privilege_type
+FROM information_schema.table_privileges
+WHERE grantee = 'developer';
+
+-- View database privileges
+\l+ mydb
+
+-- View schema privileges
+\dn+
+
+-- View table ACL (access control list)
+SELECT relname, relacl 
+FROM pg_class 
+WHERE relname = 'employees';
+```
+
+## Revoke Privileges
+
+Remove privileges from roles:
+
+```sql
+-- Revoke specific privilege
+REVOKE INSERT ON TABLE employees FROM developer;
+
+-- Revoke all privileges
+REVOKE ALL PRIVILEGES ON TABLE employees FROM developer;
+
+-- Revoke from all users
+REVOKE ALL PRIVILEGES ON TABLE employees FROM PUBLIC;
+
+-- Revoke grant option
+REVOKE GRANT OPTION FOR SELECT ON TABLE employees FROM developer;
+
+-- Cascade revoke (revoke from grantees too)
+REVOKE SELECT ON TABLE employees FROM developer CASCADE;
+```
+
+## Authorization Best Practices
+
+1. **Principle of Least Privilege**: Grant only the minimum privileges needed
+2. **Use Groups**: Create role groups and grant privileges to groups rather than individual users
+3. **Avoid Superuser**: Limit superuser access to absolute necessities
+4. **Regular Audits**: Periodically review and audit role privileges
+5. **Default Privileges**: Use `ALTER DEFAULT PRIVILEGES` for consistent permissions on new objects
+6. **RLS for Multi-Tenancy**: Implement row-level security for multi-tenant applications
+7. **Separate Roles**: Use different roles for different application functions
+8. **Document Roles**: Maintain documentation of role purposes and privilege levels
+
+## Privilege Inheritance
+
+Understand how privilege inheritance works:
+
+```sql
+-- Create group role
+CREATE ROLE data_scientists;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO data_scientists;
+
+-- Create user and grant group membership
+CREATE ROLE analyst WITH LOGIN PASSWORD 'pass' INHERIT;
+GRANT data_scientists TO analyst;
+
+-- analyst automatically inherits SELECT privileges
+
+-- Create user without inheritance
+CREATE ROLE temp_analyst WITH LOGIN PASSWORD 'pass' NOINHERIT;
+GRANT data_scientists TO temp_analyst;
+
+-- temp_analyst must explicitly switch role to use privileges
+SET ROLE data_scientists;
+```
+
+## Troubleshooting
+
+**Permission denied errors:**
+
+```sql
+-- Check current user and roles
+SELECT current_user, session_user;
+SELECT * FROM pg_roles WHERE rolname = current_user;
+
+-- Check what privileges current user has
+SELECT * FROM information_schema.table_privileges 
+WHERE grantee = current_user;
+```
+
+**Unable to drop role:**
+
+```sql
+-- Check dependencies
+SELECT * FROM pg_shdepend WHERE refobjid = 
+  (SELECT oid FROM pg_roles WHERE rolname = 'developer');
+
+-- Reassign owned objects
+REASSIGN OWNED BY developer TO postgres;
+
+-- Drop owned objects
+DROP OWNED BY developer;
+
+-- Now drop the role
+DROP ROLE developer;
+```

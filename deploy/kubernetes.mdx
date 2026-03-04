@@ -1,0 +1,546 @@
+---
+title: Kubernetes Deployment
+description: Deploy YugabyteDB on Kubernetes using Helm charts or StatefulSets
+---
+
+Deploy YugabyteDB natively on Kubernetes for production-ready, cloud-native database deployments with automated scaling and self-healing.
+
+## Prerequisites
+
+- Kubernetes 1.20 or later
+- kubectl configured to access your cluster
+- Helm 3.4 or later (for Helm-based deployment)
+- Minimum cluster resources:
+  - 12 CPU cores (3 nodes × 4 cores)
+  - 45 GB RAM (3 nodes × 15 GB)
+  - Persistent storage provisioner
+
+## Deployment Methods
+
+YugabyteDB supports two primary deployment methods on Kubernetes:
+
+1. **Helm Charts** (Recommended) - Simplified deployment and management
+2. **StatefulSet YAML** - Direct Kubernetes resource management
+
+## Helm Chart Deployment
+
+### Add YugabyteDB Helm Repository
+
+<Steps>
+
+<Step title="Add the repository">
+
+```bash
+helm repo add yugabytedb https://charts.yugabyte.com
+helm repo update
+```
+
+</Step>
+
+<Step title="Validate chart version">
+
+```bash
+helm search repo yugabytedb/yugabyte
+```
+
+**Output:**
+```
+NAME                 CHART VERSION  APP VERSION   DESCRIPTION
+yugabytedb/yugabyte  2.25.0         2.25.0.0      YugabyteDB is the high-performance distributed ...
+```
+
+</Step>
+
+<Step title="Create namespace and install">
+
+```bash
+kubectl create namespace yb-demo
+
+helm install yb-demo yugabytedb/yugabyte \
+  --namespace yb-demo \
+  --wait
+```
+
+</Step>
+
+</Steps>
+
+### Configuration Options
+
+#### Storage Configuration
+
+Configure persistent volume claims:
+
+```yaml
+# custom-values.yaml
+storage:
+  master:
+    count: 1
+    size: 10Gi
+    storageClass: standard
+  tserver:
+    count: 1  
+    size: 100Gi
+    storageClass: fast-ssd
+```
+
+Apply the configuration:
+
+```bash
+helm install yb-demo yugabytedb/yugabyte \
+  -f custom-values.yaml \
+  --namespace yb-demo
+```
+
+#### Resource Limits
+
+```yaml
+resource:
+  master:
+    requests:
+      cpu: 2
+      memory: 4Gi
+    limits:
+      cpu: 2
+      memory: 4Gi
+  tserver:
+    requests:
+      cpu: 4
+      memory: 8Gi
+    limits:
+      cpu: 4  
+      memory: 8Gi
+```
+
+#### Replication Factor
+
+```yaml
+replicas:
+  master: 3
+  tserver: 3
+  replicationFactor: 3
+```
+
+#### Enable TLS
+
+```yaml
+tls:
+  enabled: true
+  certManager:
+    enabled: true
+```
+
+## StatefulSet Deployment
+
+For more control over Kubernetes resources, deploy using StatefulSet manifests directly.
+
+### Deploy YB-Masters
+
+<Steps>
+
+<Step title="Create YB-Master headless service">
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: yb-masters
+  labels:
+    app: yb-master
+spec:
+  clusterIP: None
+  ports:
+  - name: ui
+    port: 7000
+  - name: rpc-port
+    port: 7100
+  selector:
+    app: yb-master
+```
+
+</Step>
+
+<Step title="Create YB-Master StatefulSet">
+
+```yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: yb-master
+  labels:
+    app: yb-master
+spec:
+  serviceName: yb-masters
+  podManagementPolicy: Parallel
+  replicas: 3
+  selector:
+    matchLabels:
+      app: yb-master
+  template:
+    metadata:
+      labels:
+        app: yb-master
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - yb-master
+              topologyKey: kubernetes.io/hostname
+      containers:
+      - name: yb-master
+        image: yugabytedb/yugabyte:latest
+        imagePullPolicy: Always
+        env:
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        command:
+          - /home/yugabyte/bin/yb-master
+          - --fs_data_dirs=/mnt/data0
+          - --rpc_bind_addresses=$(POD_NAME).yb-masters.$(NAMESPACE).svc.cluster.local:7100
+          - --server_broadcast_addresses=$(POD_NAME).yb-masters.$(NAMESPACE).svc.cluster.local:7100
+          - --master_addresses=yb-master-0.yb-masters.$(NAMESPACE).svc.cluster.local:7100,yb-master-1.yb-masters.$(NAMESPACE).svc.cluster.local:7100,yb-master-2.yb-masters.$(NAMESPACE).svc.cluster.local:7100
+          - --replication_factor=3
+          - --enable_ysql=true
+          - --use_private_ip=never
+        ports:
+        - containerPort: 7000
+          name: master-ui
+        - containerPort: 7100
+          name: master-rpc
+        volumeMounts:
+        - name: datadir
+          mountPath: /mnt/data0
+  volumeClaimTemplates:
+  - metadata:
+      name: datadir
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: standard
+      resources:
+        requests:
+          storage: 10Gi
+```
+
+</Step>
+
+<Step title="Deploy YB-Masters">
+
+```bash
+kubectl apply -f yb-master.yaml -n yb-demo
+```
+
+</Step>
+
+</Steps>
+
+### Deploy YB-TServers
+
+<Steps>
+
+<Step title="Create YB-TServer headless service">
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: yb-tservers
+  labels:
+    app: yb-tserver
+spec:
+  clusterIP: None
+  ports:
+  - name: ui
+    port: 9000
+  - name: rpc-port
+    port: 9100
+  - name: cassandra
+    port: 9042
+  - name: postgres
+    port: 5433
+  selector:
+    app: yb-tserver
+```
+
+</Step>
+
+<Step title="Create YB-TServer StatefulSet">
+
+```yaml
+apiVersion: apps/v1
+kind: StatefulSet  
+metadata:
+  name: yb-tserver
+  labels:
+    app: yb-tserver
+spec:
+  serviceName: yb-tservers
+  podManagementPolicy: Parallel
+  replicas: 3
+  selector:
+    matchLabels:
+      app: yb-tserver
+  template:
+    metadata:
+      labels:
+        app: yb-tserver
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - yb-tserver
+              topologyKey: kubernetes.io/hostname
+      containers:
+      - name: yb-tserver
+        image: yugabytedb/yugabyte:latest
+        imagePullPolicy: Always
+        env:
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        command:
+          - /home/yugabyte/bin/yb-tserver
+          - --fs_data_dirs=/mnt/data0
+          - --rpc_bind_addresses=$(POD_NAME).yb-tservers.$(NAMESPACE).svc.cluster.local:9100
+          - --server_broadcast_addresses=$(POD_NAME).yb-tservers.$(NAMESPACE).svc.cluster.local:9100
+          - --enable_ysql=true
+          - --pgsql_proxy_bind_address=$(POD_IP):5433
+          - --tserver_master_addrs=yb-master-0.yb-masters.$(NAMESPACE).svc.cluster.local:7100,yb-master-1.yb-masters.$(NAMESPACE).svc.cluster.local:7100,yb-master-2.yb-masters.$(NAMESPACE).svc.cluster.local:7100
+          - --use_private_ip=never
+        ports:
+        - containerPort: 9000
+          name: tserver-ui
+        - containerPort: 9100
+          name: tserver-rpc
+        - containerPort: 9042
+          name: cassandra
+        - containerPort: 5433
+          name: postgres
+        volumeMounts:
+        - name: datadir
+          mountPath: /mnt/data0
+  volumeClaimTemplates:
+  - metadata:
+      name: datadir
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: standard
+      resources:
+        requests:
+          storage: 100Gi
+```
+
+</Step>
+
+<Step title="Deploy YB-TServers">
+
+```bash
+kubectl apply -f yb-tserver.yaml -n yb-demo
+```
+
+</Step>
+
+</Steps>
+
+## Verify Deployment
+
+### Check Pod Status
+
+```bash
+kubectl get pods -n yb-demo
+```
+
+**Output:**
+```
+NAME           READY   STATUS    RESTARTS   AGE
+yb-master-0    1/1     Running   0          5m
+yb-master-1    1/1     Running   0          5m
+yb-master-2    1/1     Running   0          5m
+yb-tserver-0   1/1     Running   0          4m
+yb-tserver-1   1/1     Running   0          4m
+yb-tserver-2   1/1     Running   0          4m
+```
+
+### Check Services
+
+```bash
+kubectl get services -n yb-demo
+```
+
+**Output:**
+```
+NAME                 TYPE           CLUSTER-IP      EXTERNAL-IP     PORT(S)
+yb-master-ui         LoadBalancer   10.109.39.242   35.225.153.213  7000:31920/TCP
+yb-masters           ClusterIP      None            <none>          7100/TCP,7000/TCP
+yb-tserver-service   LoadBalancer   10.98.36.163    35.225.153.214  5433:30048/TCP,9042:30975/TCP
+yb-tservers          ClusterIP      None            <none>          9100/TCP,9000/TCP,5433/TCP,9042/TCP
+```
+
+## Connect to the Cluster
+
+### From Within Kubernetes
+
+```bash
+# YSQL
+kubectl exec -n yb-demo -it yb-tserver-0 -- ysqlsh \
+  -h yb-tserver-0.yb-tservers.yb-demo
+
+# YCQL
+kubectl exec -n yb-demo -it yb-tserver-0 -- ycqlsh \
+  yb-tserver-0.yb-tservers.yb-demo
+```
+
+### From External Clients
+
+Get the LoadBalancer external IP:
+
+```bash
+kubectl get svc yb-tserver-service -n yb-demo
+```
+
+Connect using the external IP:
+
+```bash
+# YSQL (port 5433)
+psql -h <EXTERNAL-IP> -p 5433 -U yugabyte
+
+# YCQL (port 9042)  
+cqlsh <EXTERNAL-IP> 9042
+```
+
+## Scaling
+
+### Scale TServers
+
+```bash
+# Helm
+helm upgrade yb-demo yugabytedb/yugabyte \
+  --set replicas.tserver=5 \
+  --namespace yb-demo
+
+# StatefulSet
+kubectl scale statefulset yb-tserver \
+  --replicas=5 \
+  -n yb-demo
+```
+
+### Scale Masters (Advanced)
+
+<Warning>
+Scaling masters requires updating master addresses configuration. Use Helm for automated management.
+</Warning>
+
+## Cleanup
+
+### Delete Helm Release
+
+```bash
+helm delete yb-demo -n yb-demo
+
+# Delete PVCs
+kubectl delete pvc -l app=yb-master -n yb-demo
+kubectl delete pvc -l app=yb-tserver -n yb-demo
+```
+
+### Delete StatefulSets
+
+```bash
+kubectl delete -f yb-tserver.yaml -n yb-demo
+kubectl delete -f yb-master.yaml -n yb-demo
+
+# Delete PVCs
+kubectl delete pvc -l app=yb-tserver -n yb-demo  
+kubectl delete pvc -l app=yb-master -n yb-demo
+```
+
+## Cloud Provider Specifics
+
+<AccordionGroup>
+  <Accordion title="Google Kubernetes Engine (GKE)">
+    
+    **Create GKE Cluster:**
+    ```bash
+    gcloud container clusters create yugabyte-cluster \
+      --enable-private-nodes \
+      --machine-type=n1-standard-8 \
+      --num-nodes=3
+    ```
+    
+    **Storage Class:** Use `standard` or `pd-ssd`
+    
+  </Accordion>
+  
+  <Accordion title="Amazon EKS">
+    
+    **Create EKS Cluster:**
+    ```bash
+    eksctl create cluster \
+      --name yugabyte-cluster \
+      --region us-east-1 \
+      --nodegroup-name standard-workers \
+      --node-type m5.2xlarge \
+      --nodes 3
+    ```
+    
+    **Storage Class:** Use `gp3` or `io2`
+    
+  </Accordion>
+  
+  <Accordion title="Azure Kubernetes Service (AKS)">
+    
+    **Create AKS Cluster:**
+    ```bash
+    az aks create \
+      --resource-group yugabyte-rg \
+      --name yugabyte-cluster \
+      --node-count 3 \
+      --node-vm-size Standard_D8s_v3
+    ```
+    
+    **Storage Class:** Use `managed-premium`
+    
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Multi-Region Deployment" icon="earth-americas" href="/deploy/multi-region">
+    Deploy across multiple regions
+  </Card>
+  <Card title="Monitoring" icon="chart-line" href="/operate/monitoring">
+    Set up monitoring and alerts
+  </Card>
+</CardGroup>

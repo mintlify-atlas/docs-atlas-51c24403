@@ -1,0 +1,372 @@
+---
+title: Java Client Driver
+description: Connect to YugabyteDB using the Java client driver with sync and async APIs
+---
+
+The YugabyteDB Java Client provides native connectivity to YugabyteDB for Java applications. It supports both synchronous and asynchronous operations for building high-performance distributed applications.
+
+## Installation
+
+Add the YugabyteDB Java client dependency to your project.
+
+<CodeGroup>
+
+```xml Maven
+<dependency>
+  <groupId>org.yb</groupId>
+  <artifactId>yb-client</artifactId>
+  <version>0.8.109-SNAPSHOT</version>
+</dependency>
+```
+
+```groovy Gradle
+implementation 'org.yb:yb-client:0.8.109-SNAPSHOT'
+```
+
+</CodeGroup>
+
+## Quick Start
+
+### Synchronous Client
+
+The `YBClient` class provides a thread-safe synchronous interface for interacting with YugabyteDB.
+
+```java
+import org.yb.client.YBClient;
+import org.yb.client.YBTable;
+import org.yb.client.ListTablesResponse;
+import com.google.common.net.HostAndPort;
+
+public class QuickStartExample {
+    public static void main(String[] args) throws Exception {
+        // Create a YBClient instance
+        YBClient client = new YBClient.YBClientBuilder("127.0.0.1:7100")
+            .defaultAdminOperationTimeoutMs(60000)
+            .defaultOperationTimeoutMs(30000)
+            .build();
+
+        try {
+            // List all tables
+            ListTablesResponse tables = client.getTablesList();
+            System.out.println("Tables: " + tables.getTableInfoList());
+
+            // Get table metadata
+            YBTable table = client.openTableByName("default", "my_table");
+            System.out.println("Schema: " + table.getSchema());
+        } finally {
+            // Always close the client
+            client.close();
+        }
+    }
+}
+```
+
+### Asynchronous Client
+
+The `AsyncYBClient` provides non-blocking operations using Deferred objects for high-concurrency scenarios.
+
+```java
+import org.yb.client.AsyncYBClient;
+import org.yb.client.ListTablesResponse;
+import com.stumbleupon.async.Callback;
+import com.stumbleupon.async.Deferred;
+
+public class AsyncExample {
+    public static void main(String[] args) throws Exception {
+        // Create async client
+        AsyncYBClient client = new AsyncYBClient.AsyncYBClientBuilder(
+            "127.0.0.1:7100"
+        ).build();
+
+        try {
+            // Async operation with callback
+            Deferred<ListTablesResponse> deferred = client.getTablesList();
+            
+            deferred.addCallback(new Callback<Void, ListTablesResponse>() {
+                @Override
+                public Void call(ListTablesResponse response) {
+                    System.out.println("Tables: " + response.getTableInfoList());
+                    return null;
+                }
+            });
+
+            // Wait for completion
+            deferred.join(10000);
+        } finally {
+            client.close();
+        }
+    }
+}
+```
+
+## Connection Configuration
+
+### Basic Connection
+
+<CodeGroup>
+
+```java Single Master
+YBClient client = new YBClient.YBClientBuilder("127.0.0.1:7100")
+    .defaultAdminOperationTimeoutMs(60000)
+    .defaultOperationTimeoutMs(30000)
+    .build();
+```
+
+```java Multiple Masters
+YBClient client = new YBClient.YBClientBuilder(
+    "master1:7100,master2:7100,master3:7100"
+)
+    .defaultAdminOperationTimeoutMs(60000)
+    .defaultOperationTimeoutMs(30000)
+    .build();
+```
+
+```java With HostAndPort
+import com.google.common.net.HostAndPort;
+import java.util.Arrays;
+
+YBClient client = new YBClient.YBClientBuilder(
+    Arrays.asList(
+        HostAndPort.fromParts("master1", 7100),
+        HostAndPort.fromParts("master2", 7100),
+        HostAndPort.fromParts("master3", 7100)
+    )
+)
+    .defaultAdminOperationTimeoutMs(60000)
+    .build();
+```
+
+</CodeGroup>
+
+### SSL/TLS Configuration
+
+```java
+import javax.net.ssl.SSLContext;
+import java.io.FileInputStream;
+import java.security.KeyStore;
+import java.security.cert.CertificateFactory;
+import java.security.cert.X509Certificate;
+
+// Load SSL certificate
+FileInputStream certStream = new FileInputStream("/path/to/root.crt");
+CertificateFactory cf = CertificateFactory.getInstance("X.509");
+X509Certificate cert = (X509Certificate) cf.generateCertificate(certStream);
+
+// Create TrustStore
+KeyStore trustStore = KeyStore.getInstance(KeyStore.getDefaultType());
+trustStore.load(null, null);
+trustStore.setCertificateEntry("yugabyte", cert);
+
+// Build client with SSL
+YBClient client = new YBClient.YBClientBuilder("master:7100")
+    .sslCertFile("/path/to/root.crt")
+    .sslClientCertFiles("/path/to/client.crt", "/path/to/client.key")
+    .build();
+```
+
+## Client Builder Options
+
+Configure the client using the builder pattern:
+
+```java
+YBClient client = new YBClient.YBClientBuilder(masterAddresses)
+    .defaultAdminOperationTimeoutMs(60000)     // Admin operations timeout
+    .defaultOperationTimeoutMs(30000)          // Regular operations timeout
+    .defaultSocketReadTimeoutMs(10000)         // Socket read timeout
+    .numTablets(8)                              // Number of tablets for new tables
+    .build();
+```
+
+### Configuration Parameters
+
+| Parameter | Description | Default |
+|-----------|-------------|----------|
+| `masterAddresses` | Comma-separated list of master addresses | Required |
+| `defaultAdminOperationTimeoutMs` | Timeout for admin operations (ms) | 30000 |
+| `defaultOperationTimeoutMs` | Timeout for regular operations (ms) | 30000 |
+| `defaultSocketReadTimeoutMs` | Socket read timeout (ms) | 10000 |
+| `numTablets` | Default number of tablets for tables | 0 (auto) |
+
+## Table Operations
+
+### Creating Tables
+
+```java
+import org.yb.ColumnSchema;
+import org.yb.Schema;
+import org.yb.Type;
+import org.yb.client.CreateTableOptions;
+import java.util.Arrays;
+
+// Define schema
+Schema schema = new Schema(Arrays.asList(
+    new ColumnSchema.ColumnSchemaBuilder("id", Type.INT32)
+        .key(true)
+        .build(),
+    new ColumnSchema.ColumnSchemaBuilder("name", Type.STRING)
+        .build(),
+    new ColumnSchema.ColumnSchemaBuilder("age", Type.INT32)
+        .build()
+));
+
+// Create table options
+CreateTableOptions options = new CreateTableOptions()
+    .setNumTablets(8)
+    .setTableType(TableType.YQL_TABLE_TYPE);
+
+// Create table
+client.createTable("default", "users", schema, options);
+```
+
+### Listing Tables
+
+```java
+import org.yb.client.ListTablesResponse;
+import org.yb.master.CatalogEntityInfo.TableInfoPB;
+
+// List all tables
+ListTablesResponse response = client.getTablesList();
+for (TableInfoPB tableInfo : response.getTableInfoList()) {
+    System.out.println("Table: " + tableInfo.getName() + 
+                       ", Namespace: " + tableInfo.getNamespace().getName());
+}
+
+// List tables in namespace
+ListTablesResponse namespaceTables = client.getTablesList("my_keyspace");
+```
+
+### Deleting Tables
+
+```java
+// Delete table by name
+client.deleteTable("default", "users");
+
+// Get table first, then delete
+YBTable table = client.openTableByName("default", "users");
+client.deleteTable(table.getTableId());
+```
+
+## Best Practices
+
+### Connection Pooling
+
+The YBClient is thread-safe and designed to be shared across threads. Create a single instance per application:
+
+```java
+public class ClientManager {
+    private static volatile YBClient instance;
+    
+    public static YBClient getInstance() {
+        if (instance == null) {
+            synchronized (ClientManager.class) {
+                if (instance == null) {
+                    instance = new YBClient.YBClientBuilder(
+                        "master1:7100,master2:7100,master3:7100"
+                    )
+                    .defaultAdminOperationTimeoutMs(60000)
+                    .defaultOperationTimeoutMs(30000)
+                    .build();
+                }
+            }
+        }
+        return instance;
+    }
+    
+    public static void shutdown() throws Exception {
+        if (instance != null) {
+            instance.close();
+            instance = null;
+        }
+    }
+}
+```
+
+### Resource Management
+
+Always close clients properly using try-with-resources:
+
+```java
+try (YBClient client = new YBClient.YBClientBuilder("127.0.0.1:7100").build()) {
+    // Perform operations
+    ListTablesResponse tables = client.getTablesList();
+    // Process results
+} // Client automatically closed
+```
+
+### Error Handling
+
+```java
+import org.yb.client.YBException;
+import com.google.common.net.HostAndPort;
+
+try {
+    YBClient client = new YBClient.YBClientBuilder("127.0.0.1:7100").build();
+    ListTablesResponse tables = client.getTablesList();
+} catch (YBException e) {
+    System.err.println("YugabyteDB error: " + e.getMessage());
+    e.printStackTrace();
+} catch (Exception e) {
+    System.err.println("Unexpected error: " + e.getMessage());
+    e.printStackTrace();
+}
+```
+
+### Timeouts and Retries
+
+```java
+// Configure appropriate timeouts
+YBClient client = new YBClient.YBClientBuilder(masterAddresses)
+    .defaultAdminOperationTimeoutMs(120000)  // 2 minutes for DDL
+    .defaultOperationTimeoutMs(30000)        // 30 seconds for DML
+    .defaultSocketReadTimeoutMs(10000)       // 10 seconds for socket reads
+    .build();
+```
+
+## Async Operations Best Practices
+
+### Handling Multiple Async Operations
+
+```java
+import com.stumbleupon.async.Deferred;
+import java.util.ArrayList;
+import java.util.List;
+
+AsyncYBClient asyncClient = new AsyncYBClient.AsyncYBClientBuilder(
+    "127.0.0.1:7100"
+).build();
+
+// Execute multiple operations concurrently
+List<Deferred<?>> operations = new ArrayList<>();
+operations.add(asyncClient.getTablesList());
+operations.add(asyncClient.getTableSchema("default", "users"));
+operations.add(asyncClient.getTableSchema("default", "products"));
+
+// Wait for all to complete
+Deferred.group(operations).join(30000);
+```
+
+### Callback Chains
+
+```java
+asyncClient.getTablesList()
+    .addCallback(new Callback<YBTable, ListTablesResponse>() {
+        @Override
+        public YBTable call(ListTablesResponse response) throws Exception {
+            String tableName = response.getTableInfoList().get(0).getName();
+            return asyncClient.openTable(tableName);
+        }
+    })
+    .addCallback(new Callback<Void, YBTable>() {
+        @Override
+        public Void call(YBTable table) {
+            System.out.println("Opened table: " + table.getName());
+            return null;
+        }
+    });
+```
+
+## Additional Resources
+
+- [YugabyteDB Java Client Source](https://github.com/yugabyte/yugabyte-db/tree/master/java/yb-client)
+- [YSQL JDBC Driver](/api/client/jdbc)
+- [YCQL Java Driver](/drivers-orms/java/ycql)

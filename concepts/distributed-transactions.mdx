@@ -1,0 +1,415 @@
+---
+title: Distributed Transactions
+description: Understanding ACID transactions across multiple shards and nodes
+---
+
+YugabyteDB supports distributed ACID transactions that can modify multiple rows across different shards and nodes. This enables strongly consistent secondary indexes, multi-table operations, and complex business logic while maintaining atomicity, consistency, isolation, and durability.
+
+## Transaction Fundamentals
+
+A transaction is a sequence of operations performed as a single logical unit of work. In YugabyteDB:
+
+- **All operations are transactions**: Even single-row updates use the transaction infrastructure
+- **Cross-shard support**: Transactions can span multiple tablets on different nodes
+- **ACID guarantees**: Full support for atomicity, consistency, isolation, and durability
+- **Multiple isolation levels**: Serializable, Snapshot (Repeatable Read), and Read Committed
+
+<Info>
+In YSQL, when `autocommit` is enabled (default), each statement executes as its own transaction unless wrapped in an explicit BEGIN/COMMIT block.
+</Info>
+
+## Hybrid Logical Clocks
+
+YugabyteDB uses Hybrid Logical Clocks (HLC) to provide globally-ordered timestamps without requiring atomic clocks like Google's TrueTime.
+
+### HLC Structure
+
+Each HLC is a tuple: `(physical_time, logical_counter)`
+
+```
+HLC = (wall_clock_time, logical_component)
+```
+
+- **Physical component**: Initialized from node's system clock (CLOCK_REALTIME)
+- **Logical component**: Monotonically increasing counter for same physical time
+
+<AccordionGroup>
+  <Accordion title="How HLC Updates Work">
+    1. Node computes its local HLC as (current_time, 0)
+    2. On RPC communication, nodes exchange HLC values
+    3. Node with lower HLC updates to max(local_HLC, received_HLC) + (0, 1)
+    4. Physical component only increases, logical resets to 0 when physical advances
+  </Accordion>
+  
+  <Accordion title="Ordering Guarantees">
+    - Events connected by causality get increasing hybrid timestamps
+    - "A happens before B on same server" → HLC(A) < HLC(B)
+    - "A sends RPC to server where B happens" → HLC(A) < HLC(B)
+    - HLCs are compared as tuples: physical time takes precedence
+  </Accordion>
+  
+  <Accordion title="Clock Skew Handling">
+    - No external clock synchronization required (but NTP recommended)
+    - Bounded by maximum clock skew between nodes (typically < 500ms)
+    - Higher skew increases transaction conflict probability
+    - Leader leases prevent split-brain despite clock drift
+  </Accordion>
+</AccordionGroup>
+
+### HLC in Action
+
+```sql
+-- Transaction at node A starts with HLC (1000, 0)
+BEGIN;
+INSERT INTO users (id, name) VALUES (1, 'Alice');
+-- Write gets timestamp (1000, 0)
+
+-- Node A sends RPC to node B with HLC (1000, 0)
+-- Node B has local time 995, updates to (1000, 1)
+INSERT INTO orders (user_id, product) VALUES (1, 'Widget');
+-- Write gets timestamp (1000, 1)
+
+COMMIT;
+-- Commit happens at (1001, 0)
+```
+
+<Tip>
+Hybrid timestamps ensure that reads at a specific timestamp see a consistent snapshot across all nodes, even without synchronized clocks.
+</Tip>
+
+## Provisional Records
+
+Uncommitted transaction data is stored separately from committed data to maintain atomicity across shards.
+
+### IntentsDB vs RegularDB
+
+Each tablet maintains two RocksDB instances:
+
+<CardGroup cols={2}>
+  <Card title="IntentsDB" icon="hourglass">
+    Stores provisional (uncommitted) records from active transactions
+  </Card>
+  <Card title="RegularDB" icon="database">
+    Stores committed data visible to all readers
+  </Card>
+</CardGroup>
+
+**Why separate storage?**
+
+- **Atomicity**: Uncommitted data stays invisible until commit
+- **Easy cleanup**: Abort transactions by deleting IntentsDB entries
+- **Efficient scanning**: List all provisional records for a transaction
+- **Independent strategies**: Different compaction/flush policies
+
+### Provisional Record Types
+
+**1. Primary Provisional Records (Write Intents)**
+
+```
+DocKey, SubKey, LockType, HybridTime -> (TransactionID, Value)
+```
+
+Example:
+```
+('user1', 'email', StrongSIWrite, T100) -> (txn_123, 'alice@example.com')
+```
+
+- Acts as a persistent lock on the key
+- Contains the actual value being written
+- Lock types: SI Write, Serializable Read/Write, Weak/Strong
+
+**2. Transaction Metadata Records**
+
+```
+TransactionID -> (StatusTabletID, IsolationLevel, Priority)
+```
+
+- Maps transaction to its status tablet
+- Stores isolation level (Serializable, Snapshot, Read Committed)
+- Random priority for conflict resolution (Fail-on-Conflict mode)
+
+**3. Reverse Index Records**
+
+```
+TransactionID, HybridTime -> PrimaryRecordKey
+```
+
+- Enables finding all provisional records for a transaction
+- Used during commit/abort cleanup
+- Write ID suffix prevents key collisions
+
+### Lock Types and Conflict Resolution
+
+| Lock Type | Used For | Conflicts With |
+|-----------|----------|----------------|
+| StrongSIWrite | Column write (Snapshot Isolation) | Any write |
+| WeakSIWrite | Row-level marker | Strong writes on same row |
+| SerializableRead | Read in serializable txn | Any write |
+| SerializableWrite | Write in serializable txn | Any read or write |
+
+<Warning>
+Conflicting provisional records can be revoked. If two transactions conflict, the conflict resolution system ensures at least one is aborted.
+</Warning>
+
+## Transaction Status Tracking
+
+Transaction status is tracked in a distributed transaction status table.
+
+### Status Table Architecture
+
+- **Sharded table**: Transaction IDs map to status tablet via hash
+- **In-memory**: Data kept in memory, backed by Raft WAL
+- **Single-shard ACID**: Status updates use single-shard transactions
+- **High availability**: Replicated via Raft like any other tablet
+
+### Transaction Status Records
+
+```
+TransactionID -> {
+  status: PENDING | COMMITTED | ABORTED,
+  commit_timestamp: HybridTime,
+  participating_tablets: [TabletID, ...]
+}
+```
+
+<Steps>
+  <Step title="PENDING">
+    Transaction is active, provisional records are being written
+  </Step>
+  <Step title="COMMITTED">
+    All participating tablets acknowledged, commit_timestamp assigned
+  </Step>
+  <Step title="ABORTED">
+    Transaction failed or was explicitly rolled back
+  </Step>
+</Steps>
+
+### Commit Process
+
+<Steps>
+  <Step title="Write Provisional Records">
+    Client writes provisional records to all participating tablets via Raft
+  </Step>
+  <Step title="Send Commit Request">
+    Transaction manager sends commit request to status tablet
+  </Step>
+  <Step title="Assign Commit Timestamp">
+    Status tablet assigns commit HLC timestamp and updates status to COMMITTED
+  </Step>
+  <Step title="Notify Participants">
+    Status tablet notifies all participating tablets of commit
+  </Step>
+  <Step title="Apply Provisional Records">
+    Tablets asynchronously move data from IntentsDB to RegularDB
+  </Step>
+  <Step title="Cleanup">
+    Remove provisional records and transaction metadata after applying
+  </Step>
+</Steps>
+
+## Multi-Version Concurrency Control (MVCC)
+
+YugabyteDB uses MVCC to allow concurrent transactions without locking on reads.
+
+### How MVCC Works
+
+```
+-- Time T1: Alice inserts a row
+INSERT INTO accounts (id, balance) VALUES (1, 1000);
+-- DocDB: (account_1, balance, T1) -> 1000
+
+-- Time T2: Bob's transaction reads (sees T1 version)
+BEGIN; -- snapshot at T2
+SELECT balance FROM accounts WHERE id = 1;
+-- Returns: 1000
+
+-- Time T3: Alice updates (Bob's transaction still running)
+UPDATE accounts SET balance = 1500 WHERE id = 1;
+-- DocDB: (account_1, balance, T3) -> 1500
+--        (account_1, balance, T1) -> 1000 (still present)
+
+-- Bob's transaction still at T2
+SELECT balance FROM accounts WHERE id = 1;
+-- Still returns: 1000 (snapshot isolation)
+
+COMMIT;
+```
+
+<Info>
+Each transaction reads at a specific hybrid timestamp. MVCC ensures that the transaction sees a consistent snapshot, even as other transactions commit changes.
+</Info>
+
+### Garbage Collection
+
+Old versions are cleaned up when:
+
+- No active transactions need them (based on oldest running transaction)
+- History retention period expires
+- Compaction runs on the tablet
+
+## Isolation Levels
+
+YugabyteDB supports three isolation levels in YSQL:
+
+### Serializable
+
+```sql
+BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+```
+
+- **Strongest guarantee**: Appears as if transactions executed serially
+- **Read and write locks**: Tracks both reads and writes
+- **Conflict detection**: Aborts if conflicts detected
+- **Performance**: Highest isolation, potential for more conflicts
+
+### Snapshot (Repeatable Read)
+
+```sql
+BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+```
+
+- **Snapshot consistency**: Reads see consistent snapshot at transaction start
+- **Write conflict detection**: Aborts on write-write conflicts
+- **Default for YCQL**: YCQL only supports this level
+- **Performance**: Good balance of consistency and throughput
+
+### Read Committed
+
+```sql
+BEGIN TRANSACTION ISOLATION LEVEL READ COMMITTED;
+```
+
+- **Statement-level snapshots**: Each statement sees latest committed data
+- **Lowest isolation**: Allows non-repeatable reads and phantom reads
+- **High concurrency**: Fewer conflicts, higher throughput
+- **PostgreSQL compatible**: Default in PostgreSQL
+
+<Tip>
+Choose isolation level based on your consistency requirements:
+- Financial transactions: Serializable
+- Most OLTP workloads: Snapshot/Repeatable Read
+- High-concurrency reads: Read Committed
+</Tip>
+
+## Transaction Example
+
+```sql
+-- Transfer money between accounts (Snapshot isolation)
+BEGIN;
+
+-- Read current balances at snapshot time T1
+SELECT balance FROM accounts WHERE id = 1; -- Alice: $1000
+SELECT balance FROM accounts WHERE id = 2; -- Bob: $500
+
+-- Write provisional records to both tablets
+UPDATE accounts SET balance = balance - 100 WHERE id = 1;
+-- Provisional: (account_1, balance, T1) -> (txn_xyz, 900)
+
+UPDATE accounts SET balance = balance + 100 WHERE id = 2;
+-- Provisional: (account_2, balance, T1) -> (txn_xyz, 600)
+
+-- Commit: atomically make both updates visible
+COMMIT;
+-- Status tablet marks txn_xyz as COMMITTED at T2
+-- Both provisional records applied to RegularDB
+-- Now visible to all readers
+```
+
+## Failure Scenarios
+
+### Transaction Manager Failure
+
+<Steps>
+  <Step title="Heartbeats Stop">
+    Transaction manager (client connection) sends heartbeats to status tablet
+  </Step>
+  <Step title="Timeout Detected">
+    Status tablet detects missing heartbeats after timeout period
+  </Step>
+  <Step title="Auto-Abort">
+    Transaction automatically aborted, provisional records become invalid
+  </Step>
+  <Step title="Client Reconnect">
+    Client receives connection error and must retry transaction
+  </Step>
+</Steps>
+
+### Tablet Leader Failure
+
+<Steps>
+  <Step title="Leader Election">
+    Raft group elects new leader (~2-3 seconds)
+  </Step>
+  <Step title="Transaction Resume">
+    New leader has all committed Raft log entries
+  </Step>
+  <Step title="Provisional Records Intact">
+    Uncommitted data persists in IntentsDB
+  </Step>
+  <Step title="Transaction Continues">
+    Transaction proceeds with new leader
+  </Step>
+</Steps>
+
+<Warning>
+Transaction latency increases by leader election time (~2-3 seconds) when tablet leader fails. Applications should implement retry logic with exponential backoff.
+</Warning>
+
+## Performance Characteristics
+
+<AccordionGroup>
+  <Accordion title="Single-Shard Transactions">
+    - Fastest path: no distributed coordination
+    - Raft replication only (3-5ms typical latency)
+    - No provisional records needed in some cases
+    - Automatically detected and optimized
+  </Accordion>
+  
+  <Accordion title="Multi-Shard Transactions">
+    - Additional RTT to status tablet for commit
+    - Provisional records written to all shards
+    - Cleanup happens asynchronously
+    - Typical latency: 10-20ms (geo-distributed: 100-200ms)
+  </Accordion>
+  
+  <Accordion title="Conflict Resolution">
+    - Wait-on-Conflict (default): Wait for conflicting transaction
+    - Fail-on-Conflict: Abort lower priority transaction immediately
+    - Configurable per transaction or globally
+    - Affects throughput under high contention
+  </Accordion>
+</AccordionGroup>
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Keep Transactions Short" icon="clock">
+    Minimize transaction duration to reduce conflicts and lock contention
+  </Card>
+  <Card title="Batch Operations" icon="layer-group">
+    Group related operations in single transaction for atomicity
+  </Card>
+  <Card title="Use Appropriate Isolation" icon="shield">
+    Choose lowest isolation level that meets consistency needs
+  </Card>
+  <Card title="Handle Conflicts" icon="rotate">
+    Implement retry logic for serialization errors and timeouts
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Consistency Model" icon="check-double" href="/concepts/consistency-model">
+    Learn about consistency guarantees and linearizability
+  </Card>
+  <Card title="Replication" icon="copy" href="/concepts/replication">
+    Understand how Raft replication works
+  </Card>
+  <Card title="Data Model" icon="table" href="/concepts/data-model">
+    Explore how data is stored in DocDB
+  </Card>
+  <Card title="Architecture" icon="sitemap" href="/concepts/architecture">
+    Review the overall system architecture
+  </Card>
+</CardGroup>

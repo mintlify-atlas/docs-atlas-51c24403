@@ -1,0 +1,492 @@
+---
+title: Consistency Model
+description: Understanding YugabyteDB's consistency guarantees and isolation levels
+---
+
+YugabyteDB provides strong consistency guarantees through the Raft consensus protocol and multi-version concurrency control (MVCC). Understanding the consistency model is crucial for building correct distributed applications.
+
+## Consistency Guarantees
+
+YugabyteDB offers different consistency guarantees depending on the operation type and configuration:
+
+<CardGroup cols={2}>
+  <Card title="Single-Row Linearizability" icon="arrow-right">
+    Single-row operations appear atomic and in real-time order
+  </Card>
+  <Card title="Multi-Row ACID" icon="arrows-rotate">
+    Distributed transactions with Serializable, Snapshot, or Read Committed isolation
+  </Card>
+  <Card title="Timeline Consistency" icon="timeline">
+    Follower reads provide monotonic, causally-consistent views
+  </Card>
+  <Card title="Eventual Consistency" icon="clock">
+    Async replication (xCluster) provides eventual consistency across universes
+  </Card>
+</CardGroup>
+
+## Single-Row Linearizability
+
+YugabyteDB guarantees linearizability for single-row operations, one of the strongest consistency models.
+
+### Definition
+
+Linearizability means:
+
+1. **Atomicity**: Every operation appears to take effect instantaneously at some point between invocation and response
+2. **Real-time ordering**: If operation A completes before operation B begins, then B observes the effects of A
+3. **Sequential consistency**: Operations appear in a total order consistent with real-time
+
+### Example
+
+```sql
+-- Time 0: Initial value
+INSERT INTO counters (id, value) VALUES (1, 0);
+
+-- Time 1: Client A starts increment
+UPDATE counters SET value = value + 1 WHERE id = 1;
+-- Operation completes at time 2
+
+-- Time 3: Client B reads (after A completes)
+SELECT value FROM counters WHERE id = 1;
+-- MUST return: 1 (linearizability guarantees this)
+
+-- Time 4: Client C starts increment  
+UPDATE counters SET value = value + 1 WHERE id = 1;
+-- Operation completes at time 5
+
+-- Time 6: Client B reads again
+SELECT value FROM counters WHERE id = 1;
+-- MUST return: 2
+```
+
+<Info>
+Linearizability ensures that once a write completes, all subsequent reads (that start after completion) see that write or a later value.
+</Info>
+
+### How It's Achieved
+
+YugabyteDB achieves single-row linearizability through:
+
+1. **Raft consensus**: Writes replicated to majority before acknowledgment
+2. **Leader leases**: Only current leader serves reads and writes
+3. **Hybrid logical clocks**: Provide causally-ordered timestamps
+4. **Leader-only reads**: Default reads go to tablet leader
+
+<Warning>
+Linearizable reads require contacting the tablet leader. For lower latency, use follower reads with relaxed consistency.
+</Warning>
+
+## Transaction Isolation Levels
+
+YugabyteDB supports three SQL isolation levels in YSQL, each with different consistency and performance tradeoffs.
+
+### Serializable Isolation
+
+```sql
+BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+```
+
+**Guarantees:**
+- Strongest isolation level
+- Transactions appear to execute in serial order
+- No anomalies possible (no dirty reads, non-repeatable reads, phantoms, write skew, or read skew)
+
+**Implementation:**
+- Tracks both reads and writes
+- Detects conflicts between concurrent transactions
+- Aborts transactions with serialization errors when conflicts detected
+
+**Example Preventing Write Skew:**
+
+```sql
+-- Account balances: Alice=$100, Bob=$100, Total=$200
+-- Business rule: Total balance must stay >= $100
+
+-- Transaction 1 (T1): Transfer $50 from Alice
+BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+SELECT SUM(balance) FROM accounts; -- Reads: $200
+UPDATE accounts SET balance = balance - 50 WHERE name = 'Alice';
+-- T1 waiting to commit...
+
+-- Transaction 2 (T2): Transfer $50 from Bob (concurrent)
+BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+SELECT SUM(balance) FROM accounts; -- Reads: $200  
+UPDATE accounts SET balance = balance - 50 WHERE name = 'Bob';
+COMMIT; -- T2 commits successfully
+
+-- Back to T1:
+COMMIT; -- ERROR: Serialization error, transaction aborted
+-- Reason: If both committed, total would be $100, violating invariant
+```
+
+<Tip>
+Use Serializable isolation for:
+- Financial transactions requiring strict correctness
+- Operations with complex invariants across rows
+- When preventing all anomalies is critical
+</Tip>
+
+### Snapshot Isolation (Repeatable Read)
+
+```sql
+BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+```
+
+**Guarantees:**
+- Reads see consistent snapshot at transaction start time
+- No dirty reads or non-repeatable reads
+- Prevents lost updates
+- **Does not prevent**: Write skew or read-only anomalies
+
+**Implementation:**
+- Each transaction gets a snapshot timestamp
+- Reads use MVCC to access data at snapshot time
+- Writes detect conflicts with concurrent updates
+- First-committer-wins conflict resolution
+
+**Example:**
+
+```sql
+-- Transaction 1 starts at time T1
+BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+SELECT * FROM products WHERE id = 1;
+-- Returns: {id: 1, price: 100, stock: 50}
+
+-- Transaction 2 updates (concurrent)
+UPDATE products SET price = 120 WHERE id = 1;
+COMMIT; -- Completes at T2
+
+-- Back to Transaction 1 (still at snapshot T1)
+SELECT * FROM products WHERE id = 1;
+-- Still returns: {id: 1, price: 100, stock: 50}
+-- Consistent snapshot preserved!
+
+UPDATE products SET stock = stock - 10 WHERE id = 1;
+COMMIT; -- May succeed or fail depending on conflicts
+```
+
+<Info>
+Snapshot isolation is the default for YCQL and provides a good balance between consistency and performance for most OLTP workloads.
+</Info>
+
+### Read Committed Isolation
+
+```sql
+BEGIN TRANSACTION ISOLATION LEVEL READ COMMITTED;
+```
+
+**Guarantees:**
+- Each statement sees latest committed data
+- No dirty reads (uncommitted data)
+- **Allows**: Non-repeatable reads and phantoms
+
+**Implementation:**
+- Each statement gets its own snapshot timestamp
+- Different statements in same transaction may see different data
+- Lower conflict probability, higher concurrency
+
+**Example:**
+
+```sql
+-- Transaction 1
+BEGIN TRANSACTION ISOLATION LEVEL READ COMMITTED;
+SELECT * FROM inventory WHERE product_id = 1;
+-- Returns: {product_id: 1, quantity: 100}
+
+-- Transaction 2 updates (concurrent)
+UPDATE inventory SET quantity = 150 WHERE product_id = 1;
+COMMIT;
+
+-- Back to Transaction 1, same SELECT
+SELECT * FROM inventory WHERE product_id = 1;
+-- Now returns: {product_id: 1, quantity: 150}
+-- Non-repeatable read: different result within same transaction!
+
+COMMIT;
+```
+
+<Tip>
+Use Read Committed for:
+- High-concurrency read workloads
+- Applications that can handle non-repeatable reads
+- PostgreSQL compatibility (PostgreSQL default)
+</Tip>
+
+### Isolation Level Comparison
+
+| Anomaly | Read Committed | Snapshot (Repeatable Read) | Serializable |
+|---------|----------------|----------------------------|---------------|
+| Dirty Read | ❌ Prevented | ❌ Prevented | ❌ Prevented |
+| Non-Repeatable Read | ✅ Possible | ❌ Prevented | ❌ Prevented |
+| Phantom Read | ✅ Possible | ❌ Prevented | ❌ Prevented |
+| Write Skew | ✅ Possible | ✅ Possible | ❌ Prevented |
+| Read Skew | ✅ Possible | ✅ Possible | ❌ Prevented |
+
+## Follower Reads (Timeline Consistency)
+
+Follower reads provide lower latency by reading from tablet followers, with timeline consistency guarantees.
+
+### What is Timeline Consistency?
+
+- **Monotonic reads**: Once you read a value, subsequent reads never return older values
+- **Causally consistent**: If update A causes update B, you never see B without A
+- **Bounded staleness**: Data may be slightly stale (configurable bound)
+- **No out-of-order**: Never see updates in wrong order
+
+### Enabling Follower Reads
+
+```sql
+-- YSQL: Set staleness tolerance
+SET yb_read_from_followers = true;
+SET yb_follower_read_staleness_ms = 30000; -- 30 seconds
+
+SELECT * FROM users WHERE id = 123;
+-- May read from follower if data is within 30s of leader
+```
+
+**Use cases:**
+- Globally distributed applications
+- Analytics queries that tolerate staleness
+- Read scaling in read-heavy workloads
+- Lower latency for geo-distributed reads
+
+<Warning>
+Follower reads provide timeline consistency, not linearizability. Use leader reads when you need the absolute latest data.
+</Warning>
+
+## Consistency vs Performance Tradeoffs
+
+<AccordionGroup>
+  <Accordion title="Leader Reads (Linearizable)">
+    **Pros:**
+    - Strongest consistency (linearizable)
+    - Always returns latest data
+    - No stale reads
+    
+    **Cons:**
+    - Higher latency (must contact leader)
+    - Lower read throughput (leader bottleneck)
+    - Network hops in geo-distributed setups
+  </Accordion>
+  
+  <Accordion title="Follower Reads (Timeline Consistent)">
+    **Pros:**
+    - Lower latency (read from nearby follower)
+    - Higher read throughput (distribute across followers)
+    - Better geo-distribution support
+    
+    **Cons:**
+    - Bounded staleness (not linearizable)
+    - May read slightly outdated data
+    - Requires configuring staleness bounds
+  </Accordion>
+  
+  <Accordion title="Serializable Transactions">
+    **Pros:**
+    - Prevents all anomalies
+    - Strongest correctness guarantees
+    - Simplifies application logic
+    
+    **Cons:**
+    - More transaction aborts
+    - Higher latency due to conflict detection
+    - Lower throughput under contention
+  </Accordion>
+  
+  <Accordion title="Read Committed Transactions">
+    **Pros:**
+    - Fewest transaction conflicts
+    - Highest throughput
+    - PostgreSQL compatible
+    
+    **Cons:**
+    - Application must handle anomalies
+    - Complex invariants harder to maintain
+    - May need application-level locking
+  </Accordion>
+</AccordionGroup>
+
+## CAP Theorem and YugabyteDB
+
+YugabyteDB is a **CP (Consistent and Partition-tolerant)** system with very high availability.
+
+### During Normal Operation
+
+- ✅ **Consistency**: Linearizable single-row operations
+- ✅ **Availability**: All nodes serve reads and writes
+- ✅ **Partition Tolerance**: N/A (no partition)
+
+### During Network Partition
+
+- ✅ **Consistency**: Majority partition maintains consistency via Raft
+- ⚠️ **Availability**: Minority partition cannot serve writes (reads depend on configuration)
+- ✅ **Partition Tolerance**: System continues operating in majority partition
+
+<Info>
+With RF=3, the system can tolerate 1 node failure. The 2 remaining nodes form a majority and continue serving all operations.
+</Info>
+
+### Leader Leases Prevent Split-Brain
+
+- Leader lease duration: 2 seconds (configurable)
+- Only one leader can have a valid lease at any time
+- Old leader steps down when lease expires
+- New leader waits out old lease before serving requests
+- Small unavailability window during failover (~2-3 seconds)
+
+```
+                  Network Partition
+                        |
+Node A (leader) ----X----+----X---- Node B (follower)
+                        |
+                        +---------- Node C (follower)
+
+Partition 1: [A] - minority, cannot elect new leader
+Partition 2: [B, C] - majority, elects new leader after lease expires
+```
+
+## Consistency in Multi-Region Deployments
+
+### Preferred Region
+
+Pin tablet leaders to a specific region for consistent low-latency writes:
+
+```yaml
+# Preferred region: us-west
+cloud.region.us-west.zone.us-west-1a: priority=1
+cloud.region.us-west.zone.us-west-1b: priority=1  
+cloud.region.us-east.zone.us-east-1a: priority=2
+```
+
+- All writes go to preferred region leaders
+- Followers in other regions provide follower reads
+- Synchronous replication ensures durability
+- Failover to other regions if preferred region fails
+
+### Geo-Partitioning
+
+Place specific rows in specific regions:
+
+```sql
+-- Partition table by region column
+CREATE TABLE users (
+    user_id UUID,
+    region TEXT,
+    data JSONB,
+    PRIMARY KEY (region, user_id)
+) PARTITION BY LIST (region);
+
+CREATE TABLE users_us PARTITION OF users 
+    FOR VALUES IN ('US')
+    TABLESPACE us_west;
+
+CREATE TABLE users_eu PARTITION OF users
+    FOR VALUES IN ('EU')  
+    TABLESPACE eu_west;
+```
+
+- Data locality: Rows physically close to users
+- Reduced latency: Fewer cross-region hops
+- Compliance: Data residency requirements
+- Linearizability: Within each partition
+
+## Tuning Consistency
+
+<CardGroup cols={2}>
+  <Card title="For Lowest Latency" icon="gauge-high">
+    - Enable follower reads
+    - Use Read Committed isolation
+    - Set staleness tolerance appropriately
+    - Place followers near applications
+  </Card>
+  
+  <Card title="For Strongest Consistency" icon="shield">
+    - Use leader reads (default)
+    - Use Serializable isolation
+    - Disable follower reads
+    - Accept higher latency
+  </Card>
+  
+  <Card title="For High Throughput" icon="chart-line">
+    - Use Snapshot/Read Committed isolation
+    - Enable follower reads for read-heavy workloads
+    - Optimize transaction batch sizes
+    - Minimize transaction scope
+  </Card>
+  
+  <Card title="For Geo-Distribution" icon="globe">
+    - Use preferred regions for write locality
+    - Use geo-partitioning for data residency
+    - Enable follower reads in remote regions
+    - Consider async replication (xCluster) for DR
+  </Card>
+</CardGroup>
+
+## Monitoring Consistency
+
+Key metrics to monitor:
+
+```sql
+-- Check for serialization errors
+SELECT count(*) FROM pg_stat_database 
+WHERE datname = 'mydb' 
+AND serialization_failure_count > 0;
+
+-- Monitor transaction conflicts
+SELECT * FROM yb_local_tablets 
+WHERE transaction_conflicts > threshold;
+
+-- Check follower lag
+SELECT tablet_id, lag_ms 
+FROM yb_replication_status
+WHERE lag_ms > 1000; -- Followers more than 1s behind
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Choose Appropriate Isolation Level">
+    - Default to Snapshot isolation for most workloads
+    - Use Serializable only when preventing all anomalies is critical
+    - Use Read Committed for maximum concurrency
+    - Test your workload at different levels
+  </Accordion>
+  
+  <Accordion title="Design for Conflicts">
+    - Minimize transaction duration
+    - Avoid hot keys (frequently updated rows)
+    - Use optimistic locking with version columns
+    - Implement exponential backoff retry logic
+  </Accordion>
+  
+  <Accordion title="Use Follower Reads Strategically">
+    - Enable for analytics and reporting
+    - Set realistic staleness bounds
+    - Don't use for operations requiring latest data
+    - Monitor follower lag metrics
+  </Accordion>
+  
+  <Accordion title="Handle Errors Gracefully">
+    - Catch and retry serialization errors (40001)
+    - Implement circuit breakers for cascading failures
+    - Log and alert on high conflict rates
+    - Consider application-level conflict resolution
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Distributed Transactions" icon="arrows-rotate" href="/concepts/distributed-transactions">
+    Deep dive into transaction implementation
+  </Card>
+  <Card title="Replication" icon="copy" href="/concepts/replication">
+    Learn how Raft ensures consistency
+  </Card>
+  <Card title="Data Model" icon="table" href="/concepts/data-model">
+    Understand MVCC and versioning
+  </Card>
+  <Card title="Architecture" icon="sitemap" href="/concepts/architecture">
+    Review the overall system design
+  </Card>
+</CardGroup>

@@ -1,0 +1,675 @@
+---
+title: Core features
+description: Explore YugabyteDB's key capabilities including distributed SQL, horizontal scalability, and high availability
+---
+
+YugabyteDB delivers powerful distributed database capabilities that combine the best of traditional RDBMS with modern NoSQL systems. This page explores the core features that make YugabyteDB an ideal choice for cloud-native applications.
+
+## Distributed SQL with PostgreSQL compatibility
+
+YugabyteDB SQL (YSQL) provides a fully relational SQL API that is wire-compatible with PostgreSQL.
+
+### PostgreSQL query layer
+
+YSSQL reuses the PostgreSQL query layer, providing:
+
+- **Full SQL support** - DDL, DML, joins, subqueries, window functions
+- **Data types** - All PostgreSQL data types including JSON, arrays, and custom types
+- **Constraints** - Primary keys, foreign keys, unique, check, and not null constraints
+- **Indexes** - B-tree, hash, GIN, GiST, and covering indexes
+- **Advanced features** - Stored procedures, triggers, views, and partitions
+
+<CodeGroup>
+```sql Create table with constraints
+CREATE TABLE orders (
+  order_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  customer_id INT NOT NULL,
+  order_date TIMESTAMP DEFAULT NOW(),
+  total_amount DECIMAL(10,2),
+  status VARCHAR(20) CHECK (status IN ('pending', 'shipped', 'delivered')),
+  CONSTRAINT fk_customer FOREIGN KEY (customer_id) 
+    REFERENCES customers(customer_id)
+);
+```
+
+```sql Use PostgreSQL extensions
+-- Enable pgcrypto for cryptographic functions
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+-- Enable pgvector for AI/ML workloads
+CREATE EXTENSION IF NOT EXISTS vector;
+
+-- Create vector column for embeddings
+ALTER TABLE documents ADD COLUMN embedding vector(1536);
+```
+
+```sql Complex queries with joins
+SELECT 
+  c.name,
+  COUNT(o.order_id) as total_orders,
+  SUM(o.total_amount) as total_spent
+FROM customers c
+LEFT JOIN orders o ON c.customer_id = o.customer_id
+WHERE o.order_date >= NOW() - INTERVAL '90 days'
+GROUP BY c.customer_id, c.name
+HAVING SUM(o.total_amount) > 1000
+ORDER BY total_spent DESC;
+```
+</CodeGroup>
+
+<Note>
+YugabyteDB currently supports PostgreSQL 15 features. The database is designed to support newer PostgreSQL versions over time.
+</Note>
+
+### Supported PostgreSQL features
+
+YugabyteDB supports the following PostgreSQL capabilities:
+
+<CardGroup cols={2}>
+  <Card title="Data types" icon="database">
+    - Numeric, text, date/time
+    - JSON/JSONB
+    - Arrays and ranges
+    - UUID, INET, CIDR
+    - Custom types
+  </Card>
+  
+  <Card title="Indexes" icon="list">
+    - Primary key indexes
+    - Secondary indexes
+    - Partial indexes
+    - Expression indexes
+    - Covering indexes
+  </Card>
+  
+  <Card title="Constraints" icon="shield-check">
+    - Primary keys
+    - Foreign keys
+    - Unique constraints
+    - Check constraints
+    - Not null constraints
+  </Card>
+  
+  <Card title="Advanced SQL" icon="code">
+    - CTEs and recursive queries
+    - Window functions
+    - Stored procedures
+    - Triggers
+    - Partitioned tables
+  </Card>
+</CardGroup>
+
+## Distributed ACID transactions
+
+YugabyteDB provides strong consistency and ACID guarantees across distributed nodes.
+
+### Transaction isolation levels
+
+YugabyteDB supports three isolation levels:
+
+<Tabs>
+  <Tab title="Serializable">
+    The strongest isolation level, preventing all concurrency anomalies.
+
+    ```sql
+    BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+      -- All reads see a consistent snapshot
+      -- Writes are serialized globally
+      UPDATE accounts SET balance = balance - 100 WHERE id = 1;
+      UPDATE accounts SET balance = balance + 100 WHERE id = 2;
+    COMMIT;
+    ```
+
+    **Use when**: Absolute correctness is required (financial transactions, inventory management)
+  </Tab>
+
+  <Tab title="Snapshot (Repeatable Read)">
+    Provides a consistent snapshot for all reads in the transaction.
+
+    ```sql
+    BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+      -- All reads see the same snapshot
+      SELECT SUM(balance) FROM accounts;
+      -- No other transaction can modify these rows
+    COMMIT;
+    ```
+
+    **Use when**: You need consistent reads without write conflicts (reporting, analytics)
+  </Tab>
+
+  <Tab title="Read Committed">
+    Each statement sees a consistent snapshot as of the statement start.
+
+    ```sql
+    BEGIN TRANSACTION ISOLATION LEVEL READ COMMITTED;
+      -- Each statement sees latest committed data
+      SELECT * FROM products WHERE id = 1;
+      UPDATE products SET stock = stock - 1 WHERE id = 1;
+    COMMIT;
+    ```
+
+    **Use when**: PostgreSQL compatibility is important, moderate concurrency needed
+
+    <Note>
+    Read Committed is enabled by default in v2025.2+ for PostgreSQL compatibility.
+    </Note>
+  </Tab>
+</Tabs>
+
+### Transaction implementation
+
+YugabyteDB implements distributed transactions based on Google Spanner's architecture:
+
+- **Hybrid logical clocks** - Provide global ordering without atomic clocks
+- **Raft consensus** - Ensures strong consistency for writes
+- **Snapshot isolation by default** - Balances performance and consistency
+- **Automatic conflict resolution** - Handles concurrent updates transparently
+
+<CodeGroup>
+```sql Bank transfer example
+BEGIN;
+  -- Debit from one account
+  UPDATE accounts 
+  SET balance = balance - 500 
+  WHERE account_id = 'acc_001';
+  
+  -- Credit to another account  
+  UPDATE accounts 
+  SET balance = balance + 500 
+  WHERE account_id = 'acc_002';
+  
+  -- Both updates succeed or both fail
+COMMIT;
+```
+
+```sql Inventory management
+BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+  -- Check current stock
+  SELECT stock FROM products WHERE product_id = 'prod_123' FOR UPDATE;
+  
+  -- Decrement if available
+  UPDATE products 
+  SET stock = stock - 5 
+  WHERE product_id = 'prod_123' AND stock >= 5;
+  
+  -- Create order record
+  INSERT INTO orders (product_id, quantity) VALUES ('prod_123', 5);
+COMMIT;
+```
+</CodeGroup>
+
+## Automatic data sharding
+
+YugabyteDB automatically distributes data across nodes for horizontal scalability.
+
+### Sharding strategies
+
+<Tabs>
+  <Tab title="Hash sharding">
+    Default sharding method that distributes data evenly:
+
+    ```sql
+    -- Hash-sharded table (default)
+    CREATE TABLE users (
+      user_id SERIAL PRIMARY KEY,
+      username VARCHAR(50),
+      email VARCHAR(100)
+    );
+    ```
+
+    **How it works:**
+    - YugabyteDB hashes the primary key
+    - Assigns rows to tablets based on hash value
+    - Ensures even distribution across nodes
+
+    **Best for:**
+    - Uniform data access patterns
+    - Write-heavy workloads
+    - No natural range queries
+  </Tab>
+
+  <Tab title="Range sharding">
+    Distributes data based on key ranges:
+
+    ```sql
+    -- Range-sharded table
+    CREATE TABLE timeseries_data (
+      timestamp TIMESTAMP,
+      sensor_id INT,
+      value FLOAT,
+      PRIMARY KEY (timestamp, sensor_id)
+    ) SPLIT INTO 10 TABLETS;
+    ```
+
+    **How it works:**
+    - Data sorted by primary key
+    - Split into contiguous ranges
+    - Each range stored in a tablet
+
+    **Best for:**
+    - Time-series data
+    - Range queries on primary key
+    - Ordered data access
+  </Tab>
+
+  <Tab title="Geo-partitioning">
+    Place data in specific geographic regions:
+
+    ```sql
+    -- Create tablespaces for different regions
+    CREATE TABLESPACE us_west_ts 
+    WITH (replica_placement='{"num_replicas": 3, 
+      "placement_blocks": [{"cloud":"aws","region":"us-west-2"}]}');
+    
+    CREATE TABLESPACE eu_ts
+    WITH (replica_placement='{"num_replicas": 3,
+      "placement_blocks": [{"cloud":"aws","region":"eu-central-1"}]}');
+    
+    -- Partition table by region
+    CREATE TABLE users (
+      user_id UUID,
+      region VARCHAR(20),
+      data JSONB
+    ) PARTITION BY LIST (region);
+    
+    CREATE TABLE users_us PARTITION OF users
+      FOR VALUES IN ('us-west', 'us-east')
+      TABLESPACE us_west_ts;
+    
+    CREATE TABLE users_eu PARTITION OF users
+      FOR VALUES IN ('eu-west', 'eu-central')
+      TABLESPACE eu_ts;
+    ```
+
+    **Best for:**
+    - Data residency compliance (GDPR)
+    - Low-latency access for geo-distributed users
+    - Multi-region applications
+  </Tab>
+</Tabs>
+
+### Tablet splitting
+
+As data grows, YugabyteDB automatically splits tablets:
+
+<Steps>
+  <Step title="Monitor tablet size">
+    YugabyteDB tracks the size of each tablet continuously.
+  </Step>
+  
+  <Step title="Trigger split">
+    When a tablet exceeds the threshold (default 10 GB), it's marked for splitting.
+  </Step>
+  
+  <Step title="Split tablet">
+    The tablet is divided into two tablets with roughly equal data.
+  </Step>
+  
+  <Step title="Rebalance">
+    New tablets may be moved to other nodes to maintain balance.
+  </Step>
+</Steps>
+
+<Note>
+Tablet splitting is automatic and online. Applications continue running without interruption.
+</Note>
+
+## High availability and fault tolerance
+
+YugabyteDB ensures continuous availability through replication and automatic failover.
+
+### Replication with Raft consensus
+
+Each tablet is replicated across multiple nodes:
+
+```
+┌──────────────────────────────────────────────┐
+│  Tablet (Users table, hash range 0-1000)    │
+├──────────────────────────────────────────────┤
+│  Node 1        Node 2        Node 3          │
+│  [Leader]      [Follower]    [Follower]      │
+│                                              │
+│  Writes go     Replicated    Replicated     │
+│  to leader     via Raft      via Raft       │
+└──────────────────────────────────────────────┘
+```
+
+**How Raft works:**
+
+<Steps>
+  <Step title="Write request">
+    Client sends write to any node, which forwards to the tablet leader.
+  </Step>
+  
+  <Step title="Leader proposes">
+    Leader proposes the write to follower replicas.
+  </Step>
+  
+  <Step title="Majority vote">
+    Once majority (2 of 3) acknowledges, write is committed.
+  </Step>
+  
+  <Step title="Apply write">
+    All replicas apply the committed write to their local storage.
+  </Step>
+</Steps>
+
+### Automatic failover
+
+When a node fails, YugabyteDB automatically recovers:
+
+<Tabs>
+  <Tab title="Leader failure">
+    ```
+    Before failure:
+    Node 1 [Leader] → Node 2 [Follower] → Node 3 [Follower]
+    
+    Node 1 fails:
+    ❌ Node 1        Node 2 [Follower] → Node 3 [Follower]
+    
+    Leader election (3 seconds):
+    ❌ Node 1        Node 2 [NEW LEADER] → Node 3 [Follower]
+    
+    Continue serving:
+    ❌ Node 1        Node 2 [Leader] → Node 3 [Follower]
+    ```
+
+    **Recovery time (RTO)**: ~3 seconds
+    **Data loss (RPO)**: 0 (no data lost)
+  </Tab>
+
+  <Tab title="Follower failure">
+    ```
+    Before failure:
+    Node 1 [Leader] → Node 2 [Follower] → Node 3 [Follower]
+    
+    Node 2 fails:
+    Node 1 [Leader] → ❌ Node 2        Node 3 [Follower]
+    
+    Continue with 2 replicas:
+    Node 1 [Leader] → ❌ Node 2        Node 3 [Follower]
+    ```
+
+    **Impact**: No downtime, writes continue with 2 replicas
+    **Recovery**: Automatic re-replication to maintain 3 copies
+  </Tab>
+
+  <Tab title="Zone failure">
+    ```
+    Multi-zone deployment:
+    Zone A: Node 1 [Leader]
+    Zone B: Node 2 [Follower]  
+    Zone C: Node 3 [Follower]
+    
+    Zone A fails:
+    ❌ Zone A: Node 1
+    Zone B: Node 2 [NEW LEADER]
+    Zone C: Node 3 [Follower]
+    ```
+
+    **Tolerates**: Loss of any single availability zone
+    **Requires**: Deployment across 3+ zones
+  </Tab>
+</Tabs>
+
+<Warning>
+For fault tolerance, you need at least 3 nodes with replication factor 3. With RF=3, you can tolerate 1 node failure. With RF=5, you can tolerate 2 node failures.
+</Warning>
+
+### Read replicas
+
+For read-heavy workloads, add read replicas:
+
+```sql
+-- Create read replica cluster
+CREATE TABLESPACE read_replica_ts
+WITH (replica_placement='{"num_replicas": 1,
+  "placement_blocks": [{"cloud":"aws","region":"us-east-1",
+    "min_num_replicas":1}]}') READ ONLY;
+
+-- Query from read replica
+SET default_tablespace = read_replica_ts;
+SELECT * FROM large_table WHERE category = 'analytics';
+```
+
+**Benefits:**
+- Offload read traffic from primary cluster
+- Serve stale reads with lower latency
+- No impact on write performance
+
+## Linear horizontal scalability
+
+YugabyteDB scales reads and writes by adding nodes.
+
+### Scaling writes
+
+Adding nodes increases write capacity:
+
+<Steps>
+  <Step title="Add new node">
+    ```bash
+    # Add node to cluster
+    ./bin/yugabyted start --join=existing_node_ip
+    ```
+  </Step>
+  
+  <Step title="Automatic rebalancing">
+    YugabyteDB automatically moves tablets to the new node to balance load.
+  </Step>
+  
+  <Step title="Increased capacity">
+    With more nodes, more tablets can accept writes in parallel.
+  </Step>
+</Steps>
+
+**Result:** Write throughput scales linearly with the number of nodes.
+
+### Scaling reads
+
+Reads scale in multiple ways:
+
+<CardGroup cols={2}>
+  <Card title="Add more nodes" icon="server">
+    More nodes = more tablet replicas = more read capacity
+  </Card>
+  
+  <Card title="Read from followers" icon="users">
+    Use follower reads for eventually consistent queries
+  </Card>
+  
+  <Card title="Smart drivers" icon="route">
+    Topology-aware drivers route reads to nearest replica
+  </Card>
+  
+  <Card title="Read replicas" icon="copy">
+    Dedicated read-only replicas in additional regions
+  </Card>
+</CardGroup>
+
+### Benchmark results
+
+YugabyteDB demonstrates linear scalability:
+
+```
+Throughput vs. Nodes (TPCC benchmark)
+
+50k ops/sec  │                                    ●
+             │                              ●
+40k ops/sec  │                        ●
+             │                  ●
+30k ops/sec  │            ●
+             │      ●
+20k ops/sec  │●
+             └────────────────────────────────────
+              3     6     9    12    15    18  nodes
+```
+
+<Tip>
+For optimal performance, use SSD or NVMe storage and ensure adequate network bandwidth between nodes.
+</Tip>
+
+## Multi-region deployments
+
+Deploy YugabyteDB across multiple geographic regions for global applications.
+
+### Synchronous replication
+
+Stretch cluster across regions with strong consistency:
+
+```yaml
+Region: us-west-2 (Oregon)
+  - Node 1, Node 2
+  
+Region: us-east-1 (Virginia)
+  - Node 3, Node 4
+  
+Region: eu-west-1 (Ireland)
+  - Node 5, Node 6
+
+Replication Factor: 3
+Quorum: 2 of 3 replicas across regions
+```
+
+**Characteristics:**
+- Strong consistency across regions
+- Automatic failover to any region
+- Higher latency for cross-region writes
+- Best for: Geo-redundancy, disaster recovery
+
+### Asynchronous replication (xCluster)
+
+Replicate data between independent clusters:
+
+```
+Primary (us-west-2)       Secondary (eu-west-1)
+┌──────────────┐          ┌──────────────┐
+│ Cluster A    │────CDC──>│ Cluster B    │
+│ (read/write) │          │ (read-only)  │
+└──────────────┘          └──────────────┘
+```
+
+**Use cases:**
+- Cross-region disaster recovery
+- Active-active multi-region setups
+- Compliance with data residency
+
+## AI/ML capabilities
+
+Build intelligent applications with vector search and machine learning features.
+
+### pgvector extension
+
+Store and query high-dimensional vectors:
+
+```sql
+-- Enable pgvector
+CREATE EXTENSION vector;
+
+-- Create table with vector column
+CREATE TABLE documents (
+  id SERIAL PRIMARY KEY,
+  content TEXT,
+  embedding vector(1536)  -- OpenAI embedding size
+);
+
+-- Create HNSW index for fast similarity search
+CREATE INDEX ON documents 
+USING hnsw (embedding vector_cosine_ops);
+
+-- Insert embeddings
+INSERT INTO documents (content, embedding) VALUES
+  ('YugabyteDB is a distributed database', '[0.1, 0.2, ...]'),
+  ('PostgreSQL compatibility', '[0.3, 0.1, ...]');
+
+-- Find similar documents
+SELECT content, 
+       embedding <=> '[0.15, 0.25, ...]' AS distance
+FROM documents
+ORDER BY embedding <=> '[0.15, 0.25, ...]'
+LIMIT 10;
+```
+
+**Use cases:**
+- Semantic search
+- Recommendation engines
+- Image similarity
+- Retrieval Augmented Generation (RAG)
+
+<Note>
+HNSW indexing provides fast approximate nearest neighbor search, making vector queries practical at scale.
+</Note>
+
+## Performance optimizations
+
+YugabyteDB includes several performance enhancements:
+
+### Cost-based optimizer
+
+Enabled by default in v2025.2+:
+
+```sql
+-- View query plan
+EXPLAIN (ANALYZE, COSTS, VERBOSE)
+SELECT c.name, COUNT(o.order_id)
+FROM customers c
+JOIN orders o ON c.customer_id = o.customer_id
+WHERE o.order_date > '2024-01-01'
+GROUP BY c.name;
+```
+
+The CBO:
+- Analyzes table statistics
+- Estimates row counts and costs
+- Chooses optimal join strategies
+- Selects best index to use
+
+### Parallel query execution
+
+Leverage multiple CPU cores:
+
+```sql
+-- Enable parallel query
+SET yb_enable_parallel_append = ON;
+
+-- Large aggregation uses parallel workers
+SELECT region, SUM(sales)
+FROM sales_data
+GROUP BY region;
+```
+
+### Bitmap scan
+
+Combine multiple indexes efficiently:
+
+```sql
+-- Create indexes
+CREATE INDEX idx_category ON products(category);
+CREATE INDEX idx_price ON products(price);
+
+-- Query uses both indexes via bitmap scan
+SELECT * FROM products
+WHERE category = 'electronics' 
+  AND price < 1000;
+```
+
+## Next steps
+
+Now that you understand YugabyteDB's core features:
+
+<CardGroup cols={2}>
+  <Card title="Build an application" icon="code" href="https://docs.yugabyte.com/stable/develop/">
+    Connect from Java, Python, Go, Node.js, and more
+  </Card>
+  
+  <Card title="Explore features" icon="flask" href="https://docs.yugabyte.com/stable/explore/">
+    Hands-on exercises with transactions, indexes, and more
+  </Card>
+  
+  <Card title="Deploy to production" icon="rocket" href="https://docs.yugabyte.com/stable/deploy/">
+    Set up multi-node clusters for production workloads
+  </Card>
+  
+  <Card title="Architecture deep dive" icon="sitemap" href="https://docs.yugabyte.com/stable/architecture/">
+    Learn about the internal architecture and design
+  </Card>
+</CardGroup>

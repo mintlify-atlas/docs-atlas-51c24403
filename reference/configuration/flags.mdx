@@ -1,0 +1,529 @@
+---
+title: Configuration Flags Reference
+description: Comprehensive reference for YugabyteDB configuration flags across all components
+---
+
+This page provides a comprehensive reference for configuration flags used across YugabyteDB components. Flags allow you to customize behavior, tune performance, configure security, and manage resources.
+
+## Overview
+
+YugabyteDB uses configuration flags (also called gflags) to control various aspects of database operation. Flags can be set for different components:
+
+- **yb-master** - Master server flags for cluster coordination
+- **yb-tserver** - Tablet server flags for data storage and processing
+- **yugabyted** - Simplified deployment utility flags
+
+## Flag Types
+
+YugabyteDB flags are categorized by their runtime behavior:
+
+| Flag Type | Description | Restart Required |
+|-----------|-------------|------------------|
+| **RUNTIME** | Can be changed at runtime using `yb-admin` | No |
+| **NON_RUNTIME** | Requires server restart to take effect | Yes |
+| **AUTO** | Auto-promoted flags for rolling upgrades | Varies |
+| **UNKNOWN** | Stability not yet determined | Potentially |
+| **TEST** | Used for testing only, not for production | N/A |
+
+## Setting Flags
+
+### Command Line
+
+Set flags directly when starting a server:
+
+```bash
+./bin/yb-master --replication_factor=3 --fs_data_dirs=/data
+```
+
+### Configuration File
+
+Use a flagfile to store all flags:
+
+```bash
+# master.conf
+--replication_factor=3
+--fs_data_dirs=/data/master
+--master_addresses=10.0.0.1:7100,10.0.0.2:7100,10.0.0.3:7100
+```
+
+Start with the flagfile:
+
+```bash
+./bin/yb-master --flagfile=/etc/yugabyte/master.conf
+```
+
+### Runtime Modification
+
+For RUNTIME flags, use yb-admin:
+
+```bash
+# Set a runtime flag on yb-tserver
+yb-admin -master_addresses <master-addresses> \
+  set_flag <tserver-host>:9100 <flag-name> <new-value>
+
+# Example
+yb-admin -master_addresses 10.0.0.1:7100 \
+  set_flag 10.0.0.1:9100 rocksdb_compact_flush_rate_limit_bytes_per_sec 268435456
+```
+
+### YugabyteDB Anywhere
+
+If using YugabyteDB Anywhere, set flags through the **Edit Flags** feature in the UI.
+
+## Common Flag Categories
+
+### General Server Configuration
+
+<AccordionGroup>
+  <Accordion title="Core Server Flags">
+    <ParamField path="--version" type="flag">
+      Display version and build information, then exit.
+    </ParamField>
+    
+    <ParamField path="--flagfile" type="string">
+      Path to configuration file containing flags.
+      
+      **Example:** `--flagfile=/etc/yugabyte/master.conf`
+    </ParamField>
+    
+    <ParamField path="--max_clock_skew_usec" type="int64">
+      Maximum expected clock skew between nodes in microseconds.
+      
+      **Default:** `500000` (500ms)
+      
+      **Component:** yb-master, yb-tserver
+    </ParamField>
+    
+    <ParamField path="--time_source" type="string">
+      Time source for the database. Set to `clockbound` for highly accurate time.
+      
+      **Default:** `""`
+      
+      **Valid values:** `""` (system), `clockbound`
+      
+      **Component:** yb-master, yb-tserver
+    </ParamField>
+  </Accordion>
+
+  <Accordion title="Networking Flags">
+    <ParamField path="--rpc_bind_addresses" type="string">
+      Comma-separated list of network addresses to bind for RPC.
+      
+      **Default:** Private IP of host
+      
+      **Component:** yb-master, yb-tserver
+    </ParamField>
+    
+    <ParamField path="--server_broadcast_addresses" type="string">
+      Public IP or DNS hostname for server-to-server communication.
+      
+      **Default:** `""`
+      
+      **Component:** yb-master, yb-tserver
+    </ParamField>
+    
+    <ParamField path="--dns_cache_expiration_ms" type="int32">
+      Duration in milliseconds until cached DNS resolution expires.
+      
+      **Default:** `60000` (1 minute)
+      
+      **Component:** yb-master, yb-tserver
+    </ParamField>
+    
+    <ParamField path="--use_private_ip" type="string">
+      Policy for using private IPs: `never`, `zone`, `region`.
+      
+      **Default:** `never`
+      
+      **Component:** yb-master, yb-tserver
+    </ParamField>
+  </Accordion>
+
+  <Accordion title="Storage Flags">
+    <ParamField path="--fs_data_dirs" type="string">
+      Comma-separated list of directories for data storage.
+      
+      **Required:** Yes
+      
+      **Component:** yb-master, yb-tserver
+      
+      **Example:** `/data/disk1,/data/disk2,/data/disk3`
+    </ParamField>
+    
+    <ParamField path="--fs_wal_dirs" type="string">
+      Comma-separated list of directories for write-ahead logs.
+      
+      **Default:** Same as `--fs_data_dirs`
+      
+      **Component:** yb-master, yb-tserver
+    </ParamField>
+    
+    <ParamField path="--rocksdb_block_cache_size_bytes" type="int64">
+      Size of RocksDB block cache in bytes. -1 for automatic sizing.
+      
+      **Default:** `-1`
+      
+      **Component:** yb-tserver
+    </ParamField>
+    
+    <ParamField path="--rocksdb_compact_flush_rate_limit_bytes_per_sec" type="int64">
+      Rate limit for compaction and flush in bytes per second.
+      
+      **Default:** `256000000` (256 MB/s)
+      
+      **Component:** yb-tserver
+    </ParamField>
+    
+    <ParamField path="--db_block_size_bytes" type="int32">
+      Size of RocksDB data blocks in bytes.
+      
+      **Default:** `32768` (32 KB)
+      
+      **Component:** yb-tserver
+    </ParamField>
+  </Accordion>
+
+  <Accordion title="Memory Flags">
+    <ParamField path="--memory_limit_hard_bytes" type="int64">
+      Maximum memory limit in bytes. 0 uses percentage of system RAM.
+      
+      **Default:** `0`
+      
+      **Component:** yb-master, yb-tserver
+    </ParamField>
+    
+    <ParamField path="--default_memory_limit_to_ram_ratio" type="double">
+      Percentage of RAM to use when memory_limit_hard_bytes is 0.
+      
+      **Default:** `0.10` (10%)
+      
+      **Component:** yb-master, yb-tserver
+    </ParamField>
+    
+    <ParamField path="--use_memory_defaults_optimized_for_ysql" type="boolean">
+      Optimize memory defaults for YSQL workloads.
+      
+      **Default:** `false`
+      
+      **Component:** yb-master, yb-tserver
+    </ParamField>
+  </Accordion>
+
+  <Accordion title="Logging Flags">
+    <ParamField path="--log_dir" type="string">
+      Directory for log files.
+      
+      **Default:** Same as `--fs_data_dirs`
+      
+      **Component:** yb-master, yb-tserver
+    </ParamField>
+    
+    <ParamField path="--max_log_size" type="int32">
+      Maximum log file size in megabytes.
+      
+      **Default:** `1800` (1.8 GB)
+      
+      **Component:** yb-master, yb-tserver
+    </ParamField>
+    
+    <ParamField path="--minloglevel" type="int32">
+      Minimum log level: 0 (INFO), 1 (WARN), 2 (ERROR), 3 (FATAL).
+      
+      **Default:** `0`
+      
+      **Component:** yb-master, yb-tserver
+    </ParamField>
+    
+    <ParamField path="--logtostderr" type="boolean">
+      Write logs to stderr instead of files.
+      
+      **Default:** `false`
+      
+      **Component:** yb-master, yb-tserver
+    </ParamField>
+  </Accordion>
+
+  <Accordion title="Cluster Configuration">
+    <ParamField path="--master_addresses" type="string">
+      Comma-separated list of master RPC addresses.
+      
+      **Required:** Yes (yb-master)
+      
+      **Component:** yb-master
+      
+      **Example:** `10.0.0.1:7100,10.0.0.2:7100,10.0.0.3:7100`
+    </ParamField>
+    
+    <ParamField path="--tserver_master_addrs" type="string">
+      Comma-separated list of master addresses for tablet server.
+      
+      **Required:** Yes (yb-tserver)
+      
+      **Component:** yb-tserver
+    </ParamField>
+    
+    <ParamField path="--replication_factor" type="int32">
+      Number of replicas for each tablet.
+      
+      **Default:** `3`
+      
+      **Valid range:** 1-7 (odd numbers recommended)
+      
+      **Component:** yb-master
+    </ParamField>
+  </Accordion>
+</AccordionGroup>
+
+### YSQL Configuration
+
+<AccordionGroup>
+  <Accordion title="YSQL Core Flags">
+    <ParamField path="--enable_ysql" type="boolean">
+      Enable YSQL API.
+      
+      **Default:** `true`
+      
+      **Component:** yb-master, yb-tserver
+    </ParamField>
+    
+    <ParamField path="--ysql_pg_conf_csv" type="string">
+      Comma-separated PostgreSQL configuration parameters.
+      
+      **Component:** yb-tserver
+      
+      **Example:** `max_connections=200,shared_buffers=2GB`
+    </ParamField>
+    
+    <ParamField path="--ysql_enable_auth" type="boolean">
+      Enable YSQL authentication.
+      
+      **Default:** `false`
+      
+      **Component:** yb-tserver
+    </ParamField>
+    
+    <ParamField path="--ysql_hba_conf_csv" type="string">
+      PostgreSQL host-based authentication rules.
+      
+      **Component:** yb-tserver
+    </ParamField>
+  </Accordion>
+
+  <Accordion title="YSQL Connection Management">
+    <ParamField path="--enable_ysql_conn_mgr" type="boolean">
+      Enable YSQL connection manager for connection pooling.
+      
+      **Default:** `false`
+      
+      **Component:** yb-tserver
+    </ParamField>
+    
+    <ParamField path="--ysql_conn_mgr_port" type="uint32">
+      Port for YSQL connection manager.
+      
+      **Default:** `5433`
+      
+      **Component:** yb-tserver
+    </ParamField>
+    
+    <ParamField path="--ysql_conn_mgr_max_pools" type="int32">
+      Maximum number of connection pools.
+      
+      **Default:** `10000`
+      
+      **Component:** yb-tserver
+    </ParamField>
+  </Accordion>
+</AccordionGroup>
+
+### Performance Tuning
+
+<AccordionGroup>
+  <Accordion title="Compaction Settings">
+    <ParamField path="--scheduled_full_compaction_frequency_hours" type="int32">
+      Frequency in hours for scheduled full compaction. 0 disables.
+      
+      **Default:** `0`
+      
+      **Component:** yb-tserver
+    </ParamField>
+    
+    <ParamField path="--auto_compact_percent_obsolete" type="double">
+      Percentage of obsolete keys to trigger automatic compaction.
+      
+      **Default:** `99`
+      
+      **Component:** yb-tserver
+    </ParamField>
+    
+    <ParamField path="--auto_compact_min_obsolete_keys_found" type="uint32">
+      Minimum obsolete keys for automatic compaction.
+      
+      **Default:** `10000`
+      
+      **Component:** yb-tserver
+    </ParamField>
+  </Accordion>
+
+  <Accordion title="RPC Queue Configuration">
+    <ParamField path="--tablet_server_svc_queue_length" type="int32">
+      Queue size for tablet server reads and writes.
+      
+      **Default:** `5000`
+      
+      **Component:** yb-tserver
+    </ParamField>
+    
+    <ParamField path="--master_svc_queue_length" type="int32">
+      RPC queue length for master service.
+      
+      **Default:** `1000`
+      
+      **Component:** yb-master
+    </ParamField>
+  </Accordion>
+
+  <Accordion title="Heartbeat Configuration">
+    <ParamField path="--heartbeat_interval_ms" type="int32">
+      Interval between heartbeats to master in milliseconds.
+      
+      **Default:** `1000`
+      
+      **Component:** yb-tserver
+    </ParamField>
+    
+    <ParamField path="--heartbeat_rpc_timeout_ms" type="int32">
+      Timeout for heartbeat RPC in milliseconds.
+      
+      **Default:** `15000`
+      
+      **Component:** yb-tserver
+    </ParamField>
+  </Accordion>
+</AccordionGroup>
+
+### Security
+
+<AccordionGroup>
+  <Accordion title="Encryption Flags">
+    <ParamField path="--use_client_to_server_encryption" type="boolean">
+      Enable SSL/TLS for client-to-server communication.
+      
+      **Default:** `false`
+      
+      **Component:** yb-master, yb-tserver
+    </ParamField>
+    
+    <ParamField path="--use_node_to_node_encryption" type="boolean">
+      Enable SSL/TLS for node-to-node communication.
+      
+      **Default:** `false`
+      
+      **Component:** yb-master, yb-tserver
+    </ParamField>
+    
+    <ParamField path="--certs_dir" type="string">
+      Directory containing SSL certificates and keys.
+      
+      **Default:** `""`
+      
+      **Component:** yb-master, yb-tserver
+    </ParamField>
+    
+    <ParamField path="--allow_insecure_connections" type="boolean">
+      Allow insecure connections when encryption is enabled.
+      
+      **Default:** `true`
+      
+      **Component:** yb-tserver
+    </ParamField>
+  </Accordion>
+
+  <Accordion title="Web Server Security">
+    <ParamField path="--webserver_certificate_file" type="string">
+      SSL certificate file for web server (.pem format).
+      
+      **Default:** `""`
+      
+      **Component:** yb-master, yb-tserver
+    </ParamField>
+    
+    <ParamField path="--webserver_password_file" type="string">
+      .htpasswd file for web server authentication.
+      
+      **Default:** `""`
+      
+      **Component:** yb-master, yb-tserver
+    </ParamField>
+  </Accordion>
+</AccordionGroup>
+
+## Flag Naming Conventions
+
+YugabyteDB flags follow these naming patterns:
+
+- **Component prefix**: `master_*`, `tserver_*`, `ysql_*`, `cql_*`
+- **Feature area**: `*_rpc_*`, `*_log_*`, `*_cache_*`, `*_compaction_*`
+- **Units**: `*_ms` (milliseconds), `*_bytes`, `*_mb`, `*_usec` (microseconds)
+
+## Best Practices
+
+### Production Deployments
+
+1. **Use flagfiles** for configuration management
+2. **Document all custom flags** and their purpose
+3. **Test flag changes** in staging before production
+4. **Monitor impact** after flag changes
+5. **Version control** your flagfiles
+
+### Performance Tuning
+
+1. **Start with defaults** and measure baseline performance
+2. **Change one flag at a time** to isolate impact
+3. **Monitor metrics** before and after changes
+4. **Document performance improvements** for future reference
+
+### Common Flag Configurations
+
+<CodeGroup>
+```bash High Performance
+# yb-tserver flags for high-performance workloads
+--tablet_server_svc_queue_length=10000
+--rocksdb_compact_flush_rate_limit_bytes_per_sec=524288000
+--rocksdb_block_cache_size_bytes=10737418240
+--memory_limit_hard_bytes=21474836480
+```
+
+```bash High Availability
+# yb-master flags for high availability
+--replication_factor=5
+--master_failover_catchup_timeout_ms=60000
+--catalog_manager_check_ts_count_for_create_table=true
+```
+
+```bash Geo-Distributed
+# Flags for geo-distributed deployment
+--use_private_ip=region
+--dns_cache_expiration_ms=300000
+--heartbeat_interval_ms=2000
+--heartbeat_rpc_timeout_ms=30000
+```
+</CodeGroup>
+
+## Viewing Current Flags
+
+To view all current flag values:
+
+```bash
+# View yb-master flags
+curl http://localhost:7000/varz
+
+# View yb-tserver flags
+curl http://localhost:9000/varz
+```
+
+## See Also
+
+- [yb-master Configuration](/reference/configuration/yb-master) - Master server configuration
+- [yb-tserver Configuration](/reference/configuration/yb-tserver) - Tablet server configuration
+- [yugabyted Reference](/reference/configuration/yugabyted) - yugabyted utility reference

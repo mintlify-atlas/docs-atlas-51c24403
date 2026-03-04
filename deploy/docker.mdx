@@ -1,0 +1,300 @@
+---
+title: Docker Deployment
+description: Deploy YugabyteDB using Docker containers for development and testing
+---
+
+Deploy YugabyteDB quickly using Docker containers. This method is ideal for local development, testing, and learning YugabyteDB.
+
+## Prerequisites
+
+- Docker 20.10+ installed and running
+- At least 4 GB RAM available for Docker
+- Docker network configured
+
+## Quick Start: Single Container
+
+Pull and run the official YugabyteDB Docker image:
+
+```bash
+# Pull the latest image
+docker pull yugabytedb/yugabyte:latest
+
+# Run a single-node cluster
+docker run -d --name yugabyte \
+  -p 7000:7000 \
+  -p 9000:9000 \
+  -p 5433:5433 \
+  -p 9042:9042 \
+  yugabytedb/yugabyte:latest bin/yugabyted start --daemon=false
+```
+
+**Exposed Ports:**
+- `7000` - YB-Master Admin UI
+- `9000` - YB-TServer Admin UI  
+- `5433` - YSQL (PostgreSQL-compatible)
+- `9042` - YCQL (Cassandra-compatible)
+
+## Multi-Node Cluster with yb-docker-ctl
+
+The `yb-docker-ctl` utility automates multi-node Docker deployments.
+
+### Create a Cluster
+
+<Steps>
+
+<Step title="Create a 3-node cluster">
+
+```bash
+./bin/yb-docker-ctl create --rf 3
+```
+
+This command:
+- Creates a Docker bridge network `yb-net`
+- Starts 3 YB-Master containers (`yb-master-n1`, `yb-master-n2`, `yb-master-n3`)
+- Starts 3 YB-TServer containers (`yb-tserver-n1`, `yb-tserver-n2`, `yb-tserver-n3`)
+- Configures replication factor 3
+- Exposes ports from the first node only
+
+</Step>
+
+<Step title="Check cluster status">
+
+```bash
+./bin/yb-docker-ctl status
+```
+
+**Example Output:**
+```
+ID             PID        Type       Node                 URL                       Status          Started At
+63a847999b66   12758      tserver    yb-tserver-n1        http://172.25.0.4:9000    Running         2024-03-04T10:15:45Z
+c8b7e8c04d5a   12823      tserver    yb-tserver-n2        http://172.25.0.5:9000    Running         2024-03-04T10:15:47Z
+f1a9d3e6b8c2   12891      tserver    yb-tserver-n3        http://172.25.0.6:9000    Running         2024-03-04T10:15:49Z
+9e4f2a1c5d8b   12756      master     yb-master-n1         http://172.25.0.2:7000    Running         2024-03-04T10:15:43Z
+b3c5d7e9a2f4   12821      master     yb-master-n2         http://172.25.0.3:7000    Running         2024-03-04T10:15:46Z
+e8a1f4b6c3d9   12889      master     yb-master-n3         http://172.25.0.7:7000    Running         2024-03-04T10:15:48Z
+```
+
+</Step>
+
+<Step title="Connect to the cluster">
+
+```bash
+# YSQL Shell
+docker exec -it yb-tserver-n1 /home/yugabyte/bin/ysqlsh
+
+# YCQL Shell  
+docker exec -it yb-tserver-n1 /home/yugabyte/bin/ycqlsh
+```
+
+</Step>
+
+</Steps>
+
+### Advanced Configuration
+
+#### Custom Placement Information
+
+Simulate multi-zone deployment with placement flags:
+
+```bash
+./bin/yb-docker-ctl create --rf 3 \
+  --placement_info "aws.us-east-1.us-east-1a,aws.us-east-1.us-east-1b,aws.us-east-1.us-east-1c"
+```
+
+#### Custom Flags
+
+Pass additional flags to masters and tservers:
+
+```bash
+./bin/yb-docker-ctl create --rf 3 \
+  --master_flags "log_cache_size_limit_mb=256,log_min_seconds_to_retain=900" \
+  --tserver_flags "memstore_size_mb=256,global_memstore_size_mb_max=1024"
+```
+
+#### Enable YCQL Authentication
+
+```bash
+./bin/yb-docker-ctl create --rf 3 --use_cassandra_authentication
+```
+
+#### Configure Sharding
+
+```bash
+./bin/yb-docker-ctl create --rf 3 \
+  --num_shards_per_tserver 4 \
+  --ysql_num_shards_per_tserver 2
+```
+
+## Cluster Management
+
+### Add a Node
+
+```bash
+./bin/yb-docker-ctl add_node
+```
+
+### Remove a Node
+
+```bash
+./bin/yb-docker-ctl remove_node 2
+```
+
+### Stop/Start Individual Nodes
+
+```bash
+# Stop a TServer node
+./bin/yb-docker-ctl stop_node 2
+
+# Stop a Master node  
+./bin/yb-docker-ctl stop_node 2 --master
+
+# Start a node
+./bin/yb-docker-ctl start_node 2
+```
+
+### Stop Entire Cluster
+
+```bash
+./bin/yb-docker-ctl stop
+```
+
+### Start Stopped Cluster
+
+```bash
+./bin/yb-docker-ctl start
+```
+
+### Destroy Cluster
+
+```bash
+./bin/yb-docker-ctl destroy
+```
+
+<Warning>
+The `destroy` command removes all containers and data. This action cannot be undone.
+</Warning>
+
+## Docker Image Details
+
+### Base Image
+
+YugabyteDB uses AlmaLinux 8 as the base image:
+
+```dockerfile
+FROM docker.io/library/almalinux:8
+```
+
+### Installed Components
+
+- YugabyteDB binaries (yb-master, yb-tserver)
+- PostgreSQL-compatible YSQL shell (ysqlsh)
+- Cassandra-compatible YCQL shell (ycqlsh)  
+- Admin tools (yb-admin, yb-tsi-cli)
+- YB Controller (for backup/restore)
+- Cloud storage tools (gsutil, azcopy, s3cmd)
+
+### Volume Mounts
+
+```bash
+docker run -v /data/yb-master:/mnt/disk0 \
+  -v /data/yb-tserver:/mnt/disk1 \
+  yugabytedb/yugabyte:latest
+```
+
+### Environment Variables
+
+- `YB_HOME=/home/yugabyte` - Installation directory
+- `YB_DISABLE_CALLHOME=true` - Disable telemetry
+
+## Production Considerations
+
+<Warning>
+Docker deployments are recommended for development and testing only. For production workloads, use Kubernetes or manual deployment on VMs.
+</Warning>
+
+### Resource Limits
+
+Set memory limits for containers:
+
+```bash
+docker run -d --name yugabyte \
+  --memory="4g" \
+  --memory-swap="4g" \
+  --cpus="2" \
+  yugabytedb/yugabyte:latest
+```
+
+### Persistent Storage
+
+Use named volumes or bind mounts:
+
+```bash
+docker volume create yb-master-data
+docker volume create yb-tserver-data
+
+docker run -d --name yugabyte \
+  -v yb-master-data:/mnt/disk0 \
+  -v yb-tserver-data:/mnt/disk1 \
+  yugabytedb/yugabyte:latest
+```
+
+### Network Configuration
+
+Create a custom bridge network:
+
+```bash
+docker network create --driver bridge yb-network
+
+docker run -d --name yugabyte \
+  --network yb-network \
+  yugabytedb/yugabyte:latest
+```
+
+## Monitoring
+
+Access the admin UIs:
+
+```bash
+# YB-Master UI
+open http://localhost:7000
+
+# YB-TServer UI  
+open http://localhost:9000
+```
+
+## Troubleshooting
+
+### View Container Logs
+
+```bash
+docker logs yb-tserver-n1
+```
+
+### Inspect Running Processes
+
+```bash
+docker exec -it yb-tserver-n1 ps aux | grep yb
+```
+
+### Check Network Connectivity
+
+```bash
+docker exec -it yb-tserver-n1 ping yb-master-n1
+```
+
+### Access Container Shell
+
+```bash
+docker exec -it yb-tserver-n1 bash
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Kubernetes Deployment" icon="dharmachakra" href="/deploy/kubernetes">
+    Production-ready orchestrated deployments
+  </Card>
+  <Card title="Manual Deployment" icon="server" href="/deploy/manual-deployment">
+    Deploy on VMs for more control
+  </Card>
+</CardGroup>

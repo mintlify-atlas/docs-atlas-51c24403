@@ -1,0 +1,478 @@
+---
+title: Data Types
+description: YCQL data types reference
+---
+
+## Overview
+
+YCQL supports a comprehensive set of data types compatible with Apache Cassandra CQL, including primitive types, collection types, and special types for distributed systems.
+
+## Primitive Types
+
+### Numeric Types
+
+#### TINYINT
+
+8-bit signed integer.
+
+- **Range**: -128 to 127
+- **Storage**: 1 byte
+- **Example**:
+
+```sql
+CREATE TABLE users (id INT PRIMARY KEY, age TINYINT);
+INSERT INTO users (id, age) VALUES (1, 25);
+```
+
+#### SMALLINT
+
+16-bit signed integer.
+
+- **Range**: -32,768 to 32,767
+- **Storage**: 2 bytes
+- **Example**:
+
+```sql
+CREATE TABLE products (id INT PRIMARY KEY, quantity SMALLINT);
+INSERT INTO products (id, quantity) VALUES (1, 1000);
+```
+
+#### INT / INTEGER
+
+32-bit signed integer.
+
+- **Range**: -2,147,483,648 to 2,147,483,647
+- **Storage**: 4 bytes
+- **Example**:
+
+```sql
+CREATE TABLE orders (order_id INT PRIMARY KEY, total INT);
+INSERT INTO orders (order_id, total) VALUES (1, 1500000);
+```
+
+#### BIGINT
+
+64-bit signed integer.
+
+- **Range**: -9,223,372,036,854,775,808 to 9,223,372,036,854,775,807
+- **Storage**: 8 bytes
+- **Example**:
+
+```sql
+CREATE TABLE transactions (tx_id BIGINT PRIMARY KEY, amount BIGINT);
+INSERT INTO transactions (tx_id, amount) VALUES (1234567890123, 1000000000);
+```
+
+#### VARINT
+
+Arbitrary-precision integer.
+
+- **Range**: Unlimited
+- **Storage**: Variable (depends on value)
+- **Example**:
+
+```sql
+CREATE TABLE large_numbers (id INT PRIMARY KEY, value VARINT);
+INSERT INTO large_numbers (id, value) VALUES (1, 123456789012345678901234567890);
+```
+
+#### DECIMAL
+
+Arbitrary-precision decimal number.
+
+- **Format**: Can include exponential notation (e.g., `1.23E+10`)
+- **Storage**: Variable
+- **Example**:
+
+```sql
+CREATE TABLE financial (id INT PRIMARY KEY, balance DECIMAL);
+INSERT INTO financial (id, balance) VALUES (1, 12345.67);
+INSERT INTO financial (id, balance) VALUES (2, 1.23E+5);
+INSERT INTO financial (id, balance) VALUES (3, -100.1);
+```
+
+#### FLOAT
+
+32-bit IEEE 754 floating point.
+
+- **Precision**: ~7 decimal digits
+- **Storage**: 4 bytes
+- **Example**:
+
+```sql
+CREATE TABLE measurements (id INT PRIMARY KEY, temperature FLOAT);
+INSERT INTO measurements (id, temperature) VALUES (1, 98.6);
+```
+
+#### DOUBLE
+
+64-bit IEEE 754 floating point.
+
+- **Precision**: ~15 decimal digits
+- **Storage**: 8 bytes
+- **Example**:
+
+```sql
+CREATE TABLE coordinates (id INT PRIMARY KEY, latitude DOUBLE, longitude DOUBLE);
+INSERT INTO coordinates (id, latitude, longitude) VALUES (1, 37.7749, -122.4194);
+```
+
+### String Types
+
+#### VARCHAR / TEXT
+
+UTF-8 encoded string.
+
+- **Size**: Variable length
+- **Max Size**: 64MB (practical limit)
+- **Example**:
+
+```sql
+CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR, bio TEXT);
+INSERT INTO users (id, name, bio) VALUES (1, 'John Doe', 'Software engineer');
+```
+
+### Boolean Type
+
+#### BOOLEAN
+
+True or false value.
+
+- **Values**: `true` or `false`
+- **Storage**: 1 byte
+- **Example**:
+
+```sql
+CREATE TABLE features (id INT PRIMARY KEY, enabled BOOLEAN);
+INSERT INTO features (id, enabled) VALUES (1, true);
+INSERT INTO features (id, enabled) VALUES (2, false);
+```
+
+### Binary Type
+
+#### BLOB
+
+Binary large object.
+
+- **Format**: Hexadecimal notation (`0x` prefix)
+- **Size**: Variable
+- **Example**:
+
+```sql
+CREATE TABLE files (id INT PRIMARY KEY, data BLOB);
+INSERT INTO files (id, data) VALUES (1, 0x48656c6c6f);
+INSERT INTO files (id, data) VALUES (2, 0xabcdef);
+```
+
+**Blob Functions**:
+
+```sql
+-- Convert types to blob
+INSERT INTO files (id, data) VALUES (3, intAsBlob(42));
+INSERT INTO files (id, data) VALUES (4, textAsBlob('hello'));
+
+-- Convert blob to types
+SELECT blobAsInt(data) FROM files WHERE id = 3;
+SELECT blobAsText(data) FROM files WHERE id = 4;
+```
+
+### Date and Time Types
+
+#### TIMESTAMP
+
+Date and time with millisecond or microsecond precision.
+
+- **Format**: Date string or milliseconds since epoch
+- **Precision**: Milliseconds (default) or microseconds (with flag)
+- **Storage**: 8 bytes
+- **Example**:
+
+```sql
+CREATE TABLE events (id INT PRIMARY KEY, created_at TIMESTAMP);
+
+-- Insert with date format
+INSERT INTO events (id, created_at) VALUES (1, '2024-01-15 10:30:45');
+INSERT INTO events (id, created_at) VALUES (2, '2024-01-15T10:30:45.123 UTC');
+INSERT INTO events (id, created_at) VALUES (3, '2024-01-15 10:30:45.123 America/New_York');
+
+-- Insert with milliseconds
+INSERT INTO events (id, created_at) VALUES (4, 1705318245123);
+
+-- Using functions
+INSERT INTO events (id, created_at) VALUES (5, toTimestamp(now()));
+INSERT INTO events (id, created_at) VALUES (6, currentTimestamp());
+```
+
+**Supported Timezone Formats**:
+- `Z` - UTC
+- `+/-HH:MM` - Offset (e.g., `+05:30`, `-08:00`)
+- `UTC` or `GMT` - Named timezone
+- `America/New_York` - IANA timezone database names
+
+#### DATE
+
+Date without time component.
+
+- **Format**: `YYYY-MM-DD`
+- **Range**: 1900-01-01 to 9999-12-31
+- **Example**:
+
+```sql
+CREATE TABLE appointments (id INT PRIMARY KEY, appointment_date DATE);
+INSERT INTO appointments (id, appointment_date) VALUES (1, '2024-03-15');
+```
+
+#### TIME
+
+Time of day (without date).
+
+- **Format**: `HH:MM:SS[.fff]`
+- **Precision**: Nanosecond
+- **Example**:
+
+```sql
+CREATE TABLE schedules (id INT PRIMARY KEY, start_time TIME);
+INSERT INTO schedules (id, start_time) VALUES (1, '09:00:00');
+INSERT INTO schedules (id, start_time) VALUES (2, '14:30:45.123');
+```
+
+### UUID Types
+
+#### UUID
+
+Universally unique identifier (128-bit).
+
+- **Format**: `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`
+- **Storage**: 16 bytes
+- **Example**:
+
+```sql
+CREATE TABLE sessions (session_id UUID PRIMARY KEY, user_id INT);
+INSERT INTO sessions (session_id, user_id) 
+  VALUES (fa713975-2630-4e37-aaef-465ab850b986, 1);
+```
+
+#### TIMEUUID
+
+Time-based UUID (version 1).
+
+- **Format**: Same as UUID but with embedded timestamp
+- **Ordering**: Chronologically sortable
+- **Example**:
+
+```sql
+CREATE TABLE messages (id TIMEUUID PRIMARY KEY, content TEXT);
+INSERT INTO messages (id, content) VALUES (now(), 'First message');
+
+-- Using functions
+INSERT INTO messages (id, content) VALUES (minTimeuuid('2024-01-15 10:00:00'), 'Message');
+INSERT INTO messages (id, content) VALUES (maxTimeuuid('2024-01-15 11:00:00'), 'Message');
+```
+
+### Network Type
+
+#### INET
+
+IPv4 or IPv6 address.
+
+- **Format**: Standard IP notation
+- **Example**:
+
+```sql
+CREATE TABLE connections (id INT PRIMARY KEY, ip_address INET);
+INSERT INTO connections (id, ip_address) VALUES (1, '192.168.1.1');
+INSERT INTO connections (id, ip_address) VALUES (2, '2001:0db8:85a3::8a2e:0370:7334');
+```
+
+### JSON Type
+
+#### JSONB
+
+Binary JSON storage (YugabyteDB-specific).
+
+- **Format**: JSON object or array
+- **Indexing**: Supports GIN indexes on JSONB columns
+- **Example**:
+
+```sql
+CREATE TABLE documents (id INT PRIMARY KEY, data JSONB);
+INSERT INTO documents (id, data) VALUES (1, '{"name": "John", "age": 30}');
+INSERT INTO documents (id, data) VALUES (2, '[1, 2, 3, 4, 5]');
+```
+
+## Collection Types
+
+### MAP
+
+Key-value pairs.
+
+- **Syntax**: `MAP<key_type, value_type>`
+- **Limitations**: No nested collections; null values not allowed
+- **Example**:
+
+```sql
+CREATE TABLE user_preferences (
+  user_id INT PRIMARY KEY,
+  settings MAP<TEXT, TEXT>,
+  scores MAP<TEXT, INT>
+);
+
+INSERT INTO user_preferences (user_id, settings, scores) 
+  VALUES (1, {'theme': 'dark', 'language': 'en'}, {'game1': 100, 'game2': 250});
+
+-- Update specific map entries
+UPDATE user_preferences SET settings['theme'] = 'light' WHERE user_id = 1;
+
+-- Delete specific map entries
+DELETE settings['language'] FROM user_preferences WHERE user_id = 1;
+```
+
+### SET
+
+Unique, unordered elements.
+
+- **Syntax**: `SET<element_type>`
+- **Characteristics**: Automatically removes duplicates
+- **Example**:
+
+```sql
+CREATE TABLE articles (
+  article_id INT PRIMARY KEY,
+  tags SET<TEXT>
+);
+
+INSERT INTO articles (article_id, tags) 
+  VALUES (1, {'technology', 'database', 'yugabyte'});
+
+-- Duplicates are automatically removed
+INSERT INTO articles (article_id, tags) 
+  VALUES (2, {'tech', 'tech', 'news'}); -- Results in {'tech', 'news'}
+
+-- Update entire set
+UPDATE articles SET tags = {'updated', 'tags'} WHERE article_id = 1;
+```
+
+### LIST
+
+Ordered, potentially duplicate elements.
+
+- **Syntax**: `LIST<element_type>`
+- **Characteristics**: Preserves insertion order and duplicates
+- **Example**:
+
+```sql
+CREATE TABLE playlists (
+  playlist_id INT PRIMARY KEY,
+  songs LIST<TEXT>,
+  ratings LIST<DOUBLE>
+);
+
+INSERT INTO playlists (playlist_id, songs, ratings) 
+  VALUES (1, ['song1', 'song2', 'song3'], [4.5, 3.0, 5.0]);
+
+-- Lists preserve order and duplicates
+INSERT INTO playlists (playlist_id, songs) 
+  VALUES (2, ['song1', 'song1', 'song2']);
+
+-- Delete by index
+DELETE songs[1] FROM playlists WHERE playlist_id = 1;
+```
+
+### Collection Limitations
+
+- **No nested collections**: `MAP<TEXT, LIST<INT>>` is not supported
+- **No null values**: Collections cannot contain null elements
+- **Cannot be primary keys**: Collections cannot be part of primary key
+- **Size limits**: Keep collection sizes reasonable for performance
+
+## Special Types
+
+### COUNTER
+
+Atomic 64-bit integer counter.
+
+- **Operations**: Only increment and decrement
+- **Constraints**: Cannot be part of primary key; requires dedicated counter table
+- **Example**:
+
+```sql
+CREATE TABLE page_views (
+  page_id INT PRIMARY KEY,
+  view_count COUNTER
+);
+
+-- Increment counter
+UPDATE page_views SET view_count = view_count + 1 WHERE page_id = 1;
+
+-- Decrement counter
+UPDATE page_views SET view_count = view_count - 5 WHERE page_id = 1;
+
+-- Cannot use INSERT with counters
+-- Can only UPDATE counters
+```
+
+## Type Conversion Functions
+
+YCQL provides functions to convert between types and blobs:
+
+### To Blob
+
+```sql
+booleanAsBlob(value)   -- BOOLEAN to BLOB
+tinyIntAsBlob(value)   -- TINYINT to BLOB
+smallIntAsBlob(value)  -- SMALLINT to BLOB
+intAsBlob(value)       -- INT to BLOB
+bigIntAsBlob(value)    -- BIGINT to BLOB
+floatAsBlob(value)     -- FLOAT to BLOB
+doubleAsBlob(value)    -- DOUBLE to BLOB
+textAsBlob(value)      -- TEXT to BLOB
+varcharAsBlob(value)   -- VARCHAR to BLOB
+timestampAsBlob(value) -- TIMESTAMP to BLOB
+uuidAsBlob(value)      -- UUID to BLOB
+timeuuidAsBlob(value)  -- TIMEUUID to BLOB
+```
+
+### From Blob
+
+```sql
+blobAsBoolean(blob)    -- BLOB to BOOLEAN
+blobAsTinyInt(blob)    -- BLOB to TINYINT
+blobAsSmallInt(blob)   -- BLOB to SMALLINT
+blobAsInt(blob)        -- BLOB to INT
+blobAsBigInt(blob)     -- BLOB to BIGINT
+blobAsFloat(blob)      -- BLOB to FLOAT
+blobAsDouble(blob)     -- BLOB to DOUBLE
+blobAsText(blob)       -- BLOB to TEXT
+blobAsVarchar(blob)    -- BLOB to VARCHAR
+blobAsTimestamp(blob)  -- BLOB to TIMESTAMP
+blobAsUuid(blob)       -- BLOB to UUID
+blobAsTimeuuid(blob)   -- BLOB to TIMEUUID
+```
+
+## Data Type Compatibility
+
+### Implicit Conversions
+
+YCQL supports automatic type promotion in some cases:
+
+- `INT` → `BIGINT` → `DECIMAL`
+- `FLOAT` → `DOUBLE`
+- `TINYINT` → `SMALLINT` → `INT` → `BIGINT`
+
+### Ordering and Comparison
+
+- Numeric types: Natural ordering
+- Text types: Lexicographic (UTF-8) ordering
+- BLOB: Byte-wise comparison
+- TIMESTAMP: Chronological ordering
+- TIMEUUID: Time-based ordering
+- Collections: Not comparable (cannot use in WHERE clauses)
+
+## Best Practices
+
+1. **Choose appropriate numeric types**: Use smallest type that fits your data range
+2. **Use TIMEUUID for time-series**: Provides both uniqueness and time ordering
+3. **Limit collection sizes**: Large collections impact performance
+4. **Consider JSONB for flexible schemas**: Better than wide tables with many nullable columns
+5. **Use DECIMAL for financial data**: Avoid floating-point precision issues
+6. **Leverage COUNTER for statistics**: Efficient atomic increments

@@ -1,0 +1,409 @@
+---
+title: Backup and Restore
+description: Comprehensive guide to backing up and restoring YugabyteDB data using distributed snapshots
+---
+
+YugabyteDB provides efficient distributed backup and restore capabilities designed for massive scalability without requiring full table scans.
+
+## Overview
+
+YugabyteDB implements distributed backups using immutable file snapshots rather than traditional database dumps. This approach:
+
+- **Scales to large datasets** - Time is independent of data size
+- **Maintains ACID consistency** - Distributed transactions handled correctly
+- **Preserves recent updates** - All committed transactions before snapshot included
+- **Works across topologies** - Restore to same or different cluster configurations
+
+## Snapshot Architecture
+
+A **snapshot** is a read-only copy of the database created as a list of immutable files. A **backup** is an off-cluster copy of that snapshot.
+
+### How Snapshots Work
+
+1. **Timestamp Selection**: Master picks a snapshot hybrid timestamp:
+   ```
+   snapshot-timestamp = current_physical_time + max_clock_skew
+   snapshot-start-time = snapshot-timestamp + max_clock_skew
+   ```
+
+2. **System Catalog Backup**: Schema backed up at YB-Master (equivalent to `ysql_dump --schema-only`)
+
+3. **Tablet Snapshots**: Each tablet creates hardlink-based snapshot of immutable SST files
+
+4. **Snapshot Completion**: Master marks snapshot complete when all tablets confirm success
+
+### Key Benefits
+
+- **No data rewrite** - Hardlinks to existing immutable files
+- **Consistent across tablets** - Single hybrid timestamp ensures ACID properties
+- **Fault tolerant** - Snapshot has same replication factor as source table
+- **No performance impact** - Minimal overhead during snapshot creation
+
+## Backup Commands
+
+### Creating Snapshots
+
+**Create database snapshot:**
+
+```bash
+yb-admin --master_addresses ip1:7100,ip2:7100,ip3:7100 \
+  create_database_snapshot ysql.database_name
+```
+
+**Create table snapshot:**
+
+```bash
+yb-admin --master_addresses ip1:7100,ip2:7100,ip3:7100 \
+  create_snapshot ysql.database_name table_name
+```
+
+**List all snapshots:**
+
+```bash
+yb-admin --master_addresses ip1:7100,ip2:7100,ip3:7100 \
+  list_snapshots
+```
+
+Output includes:
+- Snapshot UUID
+- Creation timestamp
+- State (CREATING, COMPLETE, FAILED)
+- Tables included
+
+**Delete snapshot:**
+
+```bash
+yb-admin --master_addresses ip1:7100,ip2:7100,ip3:7100 \
+  delete_snapshot <snapshot-id>
+```
+
+### Exporting Snapshots
+
+**Create backup from snapshot:**
+
+```bash
+yb-admin --master_addresses ip1:7100,ip2:7100,ip3:7100 \
+  create_snapshot_schedule ysql.database_name <interval> <retention>
+```
+
+**Export snapshot metadata:**
+
+```bash
+yb-admin --master_addresses ip1:7100,ip2:7100,ip3:7100 \
+  export_snapshot <snapshot-id> <target-file>
+```
+
+The snapshot consists of:
+- Immutable SST data files (per tablet replica)
+- System catalog metadata
+- Snapshot hybrid timestamp
+- Tablet replica locations
+
+## Restore Operations
+
+### Restoring from Snapshot
+
+**Import snapshot metadata:**
+
+```bash
+yb-admin --master_addresses ip1:7100,ip2:7100,ip3:7100 \
+  import_snapshot <metadata-file> [<keyspace>.<table>]
+```
+
+**Restore to specific keyspace:**
+
+```bash
+yb-admin --master_addresses ip1:7100,ip2:7100,ip3:7100 \
+  restore_snapshot <snapshot-id> <restore-timestamp>
+```
+
+### Restore Scenarios
+
+**Same cluster restore:**
+- Original tables must be dropped first
+- Schema recreated automatically from snapshot
+- Data restored to original or new namespace
+
+**Different cluster restore:**
+- Cluster topology can differ (different node count/types)
+- Tables created automatically during restore
+- Replication factor maintained from source
+
+**Cross-version restore:**
+- Generally supported for minor version differences
+- Test in staging environment first
+- Review release notes for compatibility
+
+## Point-in-Time Recovery (PITR)
+
+PITR allows rolling back to any specific timestamp within the retention window.
+
+### Enabling PITR
+
+**Configure history retention:**
+
+```bash
+yb-admin --master_addresses ip1:7100,ip2:7100,ip3:7100 \
+  create_snapshot_schedule ysql.database_name \
+  <snapshot-interval-minutes> <retention-hours>
+```
+
+Example - 15-minute snapshots, 24-hour retention:
+```bash
+yb-admin --master_addresses ip1:7100,ip2:7100,ip3:7100 \
+  create_snapshot_schedule ysql.production_db 15 24
+```
+
+**List snapshot schedules:**
+
+```bash
+yb-admin --master_addresses ip1:7100,ip2:7100,ip3:7100 \
+  list_snapshot_schedules
+```
+
+### PITR Architecture
+
+**History Retention:**
+- Updates retain hybrid timestamps for specified duration
+- Compactions preserve older row versions within window
+- Transaction status table backed up with data
+- WAL files archived for incremental recovery
+
+**Recovery Point Objective (RPO):**
+- Determined by snapshot interval
+- Shorter intervals = lower RPO but higher overhead
+- Typical: 15-60 minute intervals
+
+### Restoring to Point in Time
+
+**In-cluster flashback:**
+
+```bash
+yb-admin --master_addresses ip1:7100,ip2:7100,ip3:7100 \
+  restore_snapshot_schedule <schedule-id> <restore-timestamp-usec>
+```
+
+**Off-cluster recovery:**
+1. Restore most recent full backup
+2. Apply incremental backups sequentially
+3. Roll forward/backward to exact timestamp
+
+### PITR Use Cases
+
+**Operator/Application Errors:**
+- Accidental `DROP TABLE` - restore before deletion
+- Incorrect `UPDATE` statement - rollback changes
+- Data corruption from bug - recover pre-bug state
+
+**Disk/Filesystem Corruption:**
+- Software bugs from upgrade
+- Filesystem-level data loss
+- Replicated corruption across cluster
+
+**Disaster Recovery:**
+- Complete cluster loss
+- Regional failure
+- Long-term data retention compliance
+
+## Incremental Backups
+
+Incremental backups capture only changes since the last backup, reducing size and frequency overhead.
+
+### Backup Types
+
+**Full Backup:**
+- Complete snapshot of all data
+- Baseline for incremental backups
+- Performed periodically (daily/weekly)
+
+**Differential Incremental:**
+- Contains changes since last incremental
+- Requires applying all incrementals in sequence
+- Smaller individual backup size
+
+**Cumulative Incremental:**
+- Contains all changes since last full backup
+- Only requires base + latest incremental
+- Larger size but faster restore
+
+### Creating Incremental Backups
+
+**Enable WAL archival:**
+- WAL files moved to archive location
+- Archive location on separate mount point
+- Automatic archival via background process
+
+**Incremental backup includes:**
+- Archived WAL files from all tablets
+- Optional SST files (optimization)
+- Transaction status table contents
+- Hybrid timestamp range
+
+### Backup Strategy Comparison
+
+| Feature | In-cluster Flashback | Off-cluster PITR | Incremental Backup |
+|---------|---------------------|------------------|-------------------|
+| Operator Error Recovery | Yes | Yes | Yes |
+| Disaster Recovery | No | Yes | Yes |
+| RPO | Very Low | High | Medium |
+| RTO | Very Low | High | High |
+| Impact/Cost | Very Low | High | Medium |
+
+## Best Practices
+
+### Backup Planning
+
+**Define Requirements:**
+- RPO: How much data loss is acceptable?
+- RTO: How quickly must recovery complete?
+- Retention: How long to keep backups?
+- Compliance: Regulatory requirements?
+
+**Recommended Strategy:**
+```
+Full Backup:          Weekly (Sunday 2 AM)
+Incremental Backup:   Daily (2 AM)
+Snapshot Schedule:    Every 30 minutes
+Retention:            30 days full, 90 days incrementals
+PITR Window:          72 hours
+```
+
+### Storage Considerations
+
+**Backup Storage:**
+- Use object storage (S3, GCS, Azure Blob)
+- Enable versioning for backup files
+- Implement lifecycle policies for retention
+- Encrypt backups at rest
+- Replicate to secondary region
+
+**Capacity Planning:**
+```
+Full Backup Size ≈ Database Size × Replication Factor
+Daily Incremental ≈ 5-15% of Full Backup
+Monthly Storage ≈ Full + (Daily × 30)
+```
+
+### Operational Guidelines
+
+**Testing:**
+1. Test restore procedures monthly
+2. Verify backup integrity automatically
+3. Practice disaster recovery scenarios
+4. Document recovery time actuals
+5. Update runbooks based on tests
+
+**Monitoring:**
+- Alert on backup failures
+- Track backup completion time
+- Monitor backup storage growth
+- Verify snapshot schedule execution
+- Check PITR retention window
+
+**Security:**
+- Encrypt backups in transit and at rest
+- Use IAM roles for cloud storage access
+- Audit backup access logs
+- Rotate encryption keys periodically
+- Test encrypted restore procedures
+
+### Performance Optimization
+
+**Minimize Impact:**
+- Schedule backups during low-traffic periods
+- Stagger backups across regions if multi-region
+- Use bandwidth throttling for network copies
+- Monitor cluster performance during backups
+
+**Speed Up Restores:**
+- Keep backups geographically close to restore target
+- Use cumulative incrementals for faster recovery
+- Pre-stage recent backups on fast storage
+- Parallelize restore operations when possible
+
+## DDL Handling
+
+Snapshots correctly handle schema changes during the snapshot window.
+
+### DROP Operations
+
+**DROP TABLE/INDEX:**
+- Table not physically deleted, only removed from catalog
+- Tablets continue running but invisible
+- Physical deletion after history retention expires
+- Restore brings back dropped objects
+
+### CREATE Operations
+
+**CREATE TABLE/INDEX:**
+- New objects visible in later snapshots
+- Rolling back drops newly created objects
+- Index backfill state preserved in snapshot
+
+### ALTER Operations
+
+**ALTER TABLE:**
+- Schema version saved at snapshot timestamp
+- All tablets revert to earlier schema version
+- Column additions/removals handled correctly
+
+## Troubleshooting
+
+### Snapshot Creation Fails
+
+**Check master logs:**
+```bash
+tail -f /home/yugabyte/master/logs/yb-master.INFO
+```
+
+**Common causes:**
+- Insufficient disk space for hardlinks
+- Clock skew exceeds max_clock_skew_usec
+- Tablet not responding (timeout)
+- Raft log retention issues
+
+**Resolution:**
+- Verify disk space on all nodes
+- Check NTP synchronization
+- Increase timeout if needed
+- Review tablet health
+
+### Restore Failures
+
+**Verify snapshot integrity:**
+```bash
+yb-admin --master_addresses ip1:7100,ip2:7100,ip3:7100 \
+  list_snapshots | grep <snapshot-id>
+```
+
+**Check state:**
+- COMPLETE: Ready for restore
+- CREATING: Still in progress
+- FAILED: Creation failed, cannot restore
+
+**Common issues:**
+- Target namespace already exists
+- Insufficient capacity in target cluster
+- Version incompatibility
+- Missing snapshot files
+
+### Performance Issues
+
+**Slow snapshot creation:**
+- Check tablet count (too many small tablets)
+- Review network bandwidth utilization
+- Monitor disk I/O during snapshot
+- Consider tablet splitting/merging
+
+**Slow restore:**
+- Verify backup file accessibility
+- Check network bandwidth to storage
+- Monitor target cluster load
+- Parallelize restore if possible
+
+## Next Steps
+
+- [Admin Guide](/operations/admin-guide) - Cluster administration tasks
+- [Performance Tuning](/operations/performance-tuning) - Optimize backup performance
+- [Monitoring](/operations/monitoring) - Monitor backup health
+- [Troubleshooting](/operations/troubleshooting) - Resolve backup issues

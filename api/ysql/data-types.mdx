@@ -1,0 +1,487 @@
+---
+title: YSQL Data Types
+headerTitle: Data Types
+linkTitle: Data Types
+description: Complete reference of data types supported in YSQL
+---
+
+YSQL supports all PostgreSQL 15 data types. The following table lists primitive and compound data types available in YSQL.
+
+## Numeric Types
+
+### Integer Types
+
+| Data Type | Alias | Storage | Range | Description |
+|-----------|-------|---------|-------|-------------|
+| `smallint` | `int2` | 2 bytes | -32,768 to 32,767 | Small-range integer |
+| `integer` | `int`, `int4` | 4 bytes | -2,147,483,648 to 2,147,483,647 | Typical integer |
+| `bigint` | `int8` | 8 bytes | -9,223,372,036,854,775,808 to 9,223,372,036,854,775,807 | Large-range integer |
+
+```sql
+CREATE TABLE integers_example (
+  id SERIAL PRIMARY KEY,
+  small_num SMALLINT,
+  regular_num INTEGER,
+  big_num BIGINT
+);
+
+INSERT INTO integers_example (small_num, regular_num, big_num)
+VALUES (100, 1000000, 9223372036854775807);
+```
+
+### Serial Types
+
+| Data Type | Alias | Storage | Range | Description |
+|-----------|-------|---------|-------|-------------|
+| `smallserial` | `serial2` | 2 bytes | 1 to 32,767 | Auto-incrementing small integer |
+| `serial` | `serial4` | 4 bytes | 1 to 2,147,483,647 | Auto-incrementing integer |
+| `bigserial` | `serial8` | 8 bytes | 1 to 9,223,372,036,854,775,807 | Auto-incrementing large integer |
+
+```sql
+CREATE TABLE users (
+  user_id SERIAL PRIMARY KEY,
+  username TEXT NOT NULL
+);
+
+INSERT INTO users (username) VALUES ('alice'), ('bob');
+-- user_id is automatically generated
+```
+
+### Floating-Point Types
+
+| Data Type | Alias | Storage | Precision | Description |
+|-----------|-------|---------|-----------|-------------|
+| `real` | `float4` | 4 bytes | 6 decimal digits | Single precision |
+| `double precision` | `float8` | 8 bytes | 15 decimal digits | Double precision |
+
+```sql
+CREATE TABLE measurements (
+  sensor_id INT PRIMARY KEY,
+  temperature REAL,
+  precise_value DOUBLE PRECISION
+);
+```
+
+### Arbitrary Precision
+
+<ParamField path="numeric" type="numeric[(p, s)]">
+  Exact numeric with selectable precision. Parameter `p` is precision (total digits), `s` is scale (decimal digits).
+</ParamField>
+
+<ParamField path="decimal" type="decimal[(p, s)]">
+  Alias for `numeric`. Exact numeric with selectable precision.
+</ParamField>
+
+```sql
+CREATE TABLE financial (
+  transaction_id INT PRIMARY KEY,
+  amount NUMERIC(10, 2),  -- 10 digits total, 2 after decimal
+  price DECIMAL(8, 3)
+);
+
+INSERT INTO financial VALUES (1, 12345.67, 999.999);
+```
+
+### Monetary Type
+
+```sql
+CREATE TABLE products (
+  product_id INT PRIMARY KEY,
+  price MONEY
+);
+
+INSERT INTO products VALUES (1, '$19.99');
+```
+
+## Character Types
+
+| Data Type | Description |
+|-----------|-------------|
+| `character varying(n)` / `varchar(n)` | Variable-length with limit |
+| `character(n)` / `char(n)` | Fixed-length, blank padded |
+| `text` | Variable unlimited length |
+
+```sql
+CREATE TABLE strings_example (
+  id INT PRIMARY KEY,
+  code CHAR(5),           -- Fixed 5 characters
+  name VARCHAR(100),      -- Up to 100 characters
+  description TEXT        -- Unlimited length
+);
+
+INSERT INTO strings_example VALUES 
+  (1, 'ABC01', 'Sample Product', 'This is a long description...');
+```
+
+## Binary Data
+
+<ParamField path="bytea" type="bytea">
+  Binary string data type for storing raw bytes. Useful for images, files, or encrypted data.
+</ParamField>
+
+```sql
+CREATE TABLE files (
+  file_id INT PRIMARY KEY,
+  file_name TEXT,
+  file_data BYTEA
+);
+
+-- Insert binary data
+INSERT INTO files VALUES (1, 'image.png', '\\xDEADBEEF'::bytea);
+```
+
+## Date/Time Types
+
+| Data Type | Storage | Description | Range |
+|-----------|---------|-------------|-------|
+| `timestamp` | 8 bytes | Date and time (no timezone) | 4713 BC to 294276 AD |
+| `timestamptz` | 8 bytes | Date and time with timezone | 4713 BC to 294276 AD |
+| `date` | 4 bytes | Date (no time) | 4713 BC to 5874897 AD |
+| `time` | 8 bytes | Time of day (no date) | 00:00:00 to 24:00:00 |
+| `timetz` | 12 bytes | Time of day with timezone | 00:00:00+1559 to 24:00:00-1559 |
+| `interval` | 16 bytes | Time interval | -178000000 years to 178000000 years |
+
+```sql
+CREATE TABLE events (
+  event_id INT PRIMARY KEY,
+  event_time TIMESTAMP,
+  event_time_tz TIMESTAMPTZ,
+  event_date DATE,
+  duration INTERVAL
+);
+
+INSERT INTO events VALUES (
+  1,
+  '2024-03-15 14:30:00',
+  '2024-03-15 14:30:00-08',
+  '2024-03-15',
+  INTERVAL '2 hours 30 minutes'
+);
+
+SELECT 
+  event_time,
+  event_time + duration AS end_time,
+  EXTRACT(YEAR FROM event_date) AS year
+FROM events;
+```
+
+## Boolean Type
+
+```sql
+CREATE TABLE flags (
+  id INT PRIMARY KEY,
+  is_active BOOLEAN DEFAULT TRUE,
+  is_deleted BOOL DEFAULT FALSE
+);
+
+INSERT INTO flags VALUES 
+  (1, TRUE, FALSE),
+  (2, 't', 'f'),      -- Alternative syntax
+  (3, 'yes', 'no'),   -- Alternative syntax
+  (4, '1', '0');      -- Alternative syntax
+
+SELECT * FROM flags WHERE is_active AND NOT is_deleted;
+```
+
+## UUID Type
+
+<ParamField path="uuid" type="uuid">
+  Universally Unique Identifier (128-bit). Useful for distributed primary keys.
+</ParamField>
+
+```sql
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+CREATE TABLE sessions (
+  session_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id INT,
+  created_at TIMESTAMP DEFAULT now()
+);
+
+INSERT INTO sessions (user_id) VALUES (1001);
+SELECT * FROM sessions;
+```
+
+## JSON Types
+
+YSQL supports both `json` and `jsonb` types for storing JSON data.
+
+<ParamField path="json" type="json">
+  Textual JSON data. Preserves formatting and order but slower to process.
+</ParamField>
+
+<ParamField path="jsonb" type="jsonb">
+  Binary JSON data. Faster to process, supports indexing. **Recommended** for most use cases.
+</ParamField>
+
+```sql
+CREATE TABLE api_logs (
+  log_id SERIAL PRIMARY KEY,
+  request_data JSONB,
+  response_data JSON,
+  created_at TIMESTAMP DEFAULT now()
+);
+
+INSERT INTO api_logs (request_data, response_data) VALUES (
+  '{"method": "GET", "path": "/api/users", "params": {"limit": 10}}',
+  '{"status": 200, "data": [{"id": 1, "name": "Alice"}]}'
+);
+
+-- Query JSON data
+SELECT 
+  request_data->>'method' AS http_method,
+  request_data->'params'->>'limit' AS limit,
+  response_data->>'status' AS status
+FROM api_logs;
+
+-- Create index on JSONB
+CREATE INDEX idx_request_method ON api_logs ((request_data->>'method'));
+```
+
+## Array Types
+
+Any data type can be made into an array by appending `[]`.
+
+```sql
+CREATE TABLE array_example (
+  id INT PRIMARY KEY,
+  tags TEXT[],
+  scores INT[],
+  matrix INT[][]
+);
+
+INSERT INTO array_example VALUES (
+  1,
+  ARRAY['postgresql', 'yugabytedb', 'sql'],
+  ARRAY[95, 87, 92],
+  ARRAY[[1,2],[3,4]]
+);
+
+-- Access array elements (1-indexed)
+SELECT 
+  tags[1] AS first_tag,
+  scores[2] AS second_score,
+  array_length(tags, 1) AS tag_count
+FROM array_example;
+
+-- Query with ANY
+SELECT * FROM array_example 
+WHERE 'sql' = ANY(tags);
+```
+
+## Range Types
+
+| Range Type | Description |
+|------------|-------------|
+| `int4range` | Range of `integer` |
+| `int8range` | Range of `bigint` |
+| `numrange` | Range of `numeric` |
+| `tsrange` | Range of `timestamp` |
+| `tstzrange` | Range of `timestamptz` |
+| `daterange` | Range of `date` |
+
+```sql
+CREATE TABLE reservations (
+  reservation_id INT PRIMARY KEY,
+  room_number INT,
+  stay_period DATERANGE,
+  price_range NUMRANGE
+);
+
+INSERT INTO reservations VALUES (
+  1,
+  101,
+  '[2024-03-15, 2024-03-20)',
+  '[100.00, 200.00]'
+);
+
+-- Check if date is in range
+SELECT * FROM reservations 
+WHERE stay_period @> '2024-03-17'::date;
+
+-- Check for overlapping ranges
+SELECT * FROM reservations 
+WHERE stay_period && '[2024-03-18, 2024-03-22)'::daterange;
+```
+
+## Geometric Types
+
+| Type | Description | Example |
+|------|-------------|------|
+| `point` | Point on a plane | `(x,y)` |
+| `line` | Infinite line | `{A,B,C}` |
+| `lseg` | Line segment | `[(x1,y1),(x2,y2)]` |
+| `box` | Rectangular box | `(x1,y1),(x2,y2)` |
+| `path` | Closed or open path | `[(x1,y1),...]` |
+| `polygon` | Polygon | `((x1,y1),...)` |
+| `circle` | Circle | `<(x,y),r>` |
+
+```sql
+CREATE TABLE locations (
+  location_id INT PRIMARY KEY,
+  position POINT,
+  area CIRCLE,
+  boundary BOX
+);
+
+INSERT INTO locations VALUES (
+  1,
+  '(10.5, 20.3)',
+  '<(0,0),5>',
+  '(0,0),(10,10)'
+);
+```
+
+## Network Address Types
+
+```sql
+CREATE TABLE network_devices (
+  device_id INT PRIMARY KEY,
+  ip_address INET,
+  network CIDR,
+  mac_address MACADDR
+);
+
+INSERT INTO network_devices VALUES (
+  1,
+  '192.168.1.100',
+  '192.168.1.0/24',
+  '08:00:2b:01:02:03'
+);
+
+SELECT * FROM network_devices 
+WHERE ip_address << '192.168.1.0/24'::inet;
+```
+
+## Enumerated Types
+
+```sql
+CREATE TYPE mood AS ENUM ('sad', 'ok', 'happy');
+
+CREATE TABLE persons (
+  person_id INT PRIMARY KEY,
+  name TEXT,
+  current_mood mood
+);
+
+INSERT INTO persons VALUES (1, 'Alice', 'happy');
+
+SELECT * FROM persons WHERE current_mood = 'happy';
+```
+
+## Composite Types
+
+```sql
+CREATE TYPE address AS (
+  street TEXT,
+  city TEXT,
+  state CHAR(2),
+  zip_code VARCHAR(10)
+);
+
+CREATE TABLE companies (
+  company_id INT PRIMARY KEY,
+  name TEXT,
+  headquarters address
+);
+
+INSERT INTO companies VALUES (
+  1,
+  'YugabyteDB Inc',
+  ROW('123 Main St', 'San Francisco', 'CA', '94105')
+);
+
+SELECT 
+  name,
+  (headquarters).city,
+  (headquarters).state
+FROM companies;
+```
+
+## Special Types
+
+### Text Search Types
+
+```sql
+CREATE TABLE documents (
+  doc_id INT PRIMARY KEY,
+  title TEXT,
+  body TEXT,
+  tsv TSVECTOR
+);
+
+INSERT INTO documents VALUES (
+  1,
+  'PostgreSQL Guide',
+  'PostgreSQL is a powerful database',
+  to_tsvector('english', 'PostgreSQL is a powerful database')
+);
+
+CREATE INDEX idx_tsv ON documents USING gin(tsv);
+
+SELECT * FROM documents 
+WHERE tsv @@ to_tsquery('english', 'database');
+```
+
+### XML Type
+
+```sql
+CREATE TABLE xml_data (
+  id INT PRIMARY KEY,
+  data XML
+);
+
+INSERT INTO xml_data VALUES (
+  1,
+  '<book><title>Database Systems</title></book>'
+);
+```
+
+## Type Conversion
+
+```sql
+-- Explicit casting
+SELECT 
+  '123'::INTEGER AS int_value,
+  123::TEXT AS text_value,
+  CAST('2024-03-15' AS DATE) AS date_value;
+
+-- Type coercion
+SELECT 
+  1 + 2.5 AS mixed_numeric,  -- Returns 3.5 (numeric)
+  'Value: ' || 42 AS concat;  -- Returns 'Value: 42'
+```
+
+## Index Support
+
+Not all data types can be used in index key columns:
+
+**Supported in indexes:**
+- All numeric types
+- Character types (text, varchar, char)
+- Date/time types
+- UUID
+- Boolean
+- JSONB (with GIN indexes)
+
+**Not supported in primary key/index:**
+- JSON (use JSONB instead)
+- Arrays (without special index types)
+- Geometric types (limited support)
+- Network types
+
+```sql
+-- Supported
+CREATE INDEX idx_timestamp ON events(event_time);
+CREATE INDEX idx_jsonb ON api_logs USING gin(request_data);
+
+-- Creates GIN index for arrays
+CREATE INDEX idx_tags ON array_example USING gin(tags);
+```
+
+## Additional Resources
+
+For more detailed information, see:
+- [PostgreSQL Data Types Documentation](https://www.postgresql.org/docs/15/datatype.html)
+- [YSQL Statements](/api/ysql/statements)
+- [YSQL Functions](/api/ysql/functions)

@@ -1,0 +1,650 @@
+---
+title: Functions
+description: YCQL built-in functions reference
+---
+
+## Overview
+
+YCQL provides a comprehensive set of built-in functions for data manipulation, type conversion, UUID generation, and timestamp operations.
+
+## Aggregate Functions
+
+Aggregate functions operate on a set of rows and return a single value.
+
+### COUNT
+
+Counts the number of rows or non-null values.
+
+**Syntax**:
+
+```sql
+COUNT(*)
+COUNT(column_name)
+```
+
+**Example**:
+
+```sql
+-- Count all rows
+SELECT COUNT(*) FROM users;
+
+-- Count non-null values in a column
+SELECT COUNT(email) FROM users;
+
+-- Count with GROUP BY
+SELECT category, COUNT(*) FROM products GROUP BY category;
+```
+
+### SUM
+
+Calculates the sum of numeric values.
+
+**Syntax**:
+
+```sql
+SUM(column_name)
+```
+
+**Example**:
+
+```sql
+SELECT SUM(price) FROM orders WHERE customer_id = 1;
+SELECT category, SUM(quantity) FROM inventory GROUP BY category;
+```
+
+### MIN
+
+Returns the minimum value.
+
+**Syntax**:
+
+```sql
+MIN(column_name)
+```
+
+**Example**:
+
+```sql
+SELECT MIN(price) FROM products;
+SELECT MIN(created_at) FROM events WHERE user_id = 1;
+```
+
+### MAX
+
+Returns the maximum value.
+
+**Syntax**:
+
+```sql
+MAX(column_name)
+```
+
+**Example**:
+
+```sql
+SELECT MAX(price) FROM products;
+SELECT MAX(event_time) FROM events WHERE user_id = 1;
+```
+
+### AVG
+
+Calculates the average of numeric values.
+
+**Syntax**:
+
+```sql
+AVG(column_name)
+```
+
+**Example**:
+
+```sql
+SELECT AVG(rating) FROM reviews WHERE product_id = 100;
+SELECT category, AVG(price) FROM products GROUP BY category;
+```
+
+## UUID and TimeUUID Functions
+
+### uuid()
+
+Generates a random UUID (version 4).
+
+**Syntax**:
+
+```sql
+uuid()
+```
+
+**Example**:
+
+```sql
+INSERT INTO sessions (session_id, user_id, created_at)
+VALUES (uuid(), 1, toTimestamp(now()));
+
+SELECT uuid() as new_id;
+```
+
+### now()
+
+Generates a new TimeUUID (version 1) with the current timestamp.
+
+**Syntax**:
+
+```sql
+now()
+```
+
+**Example**:
+
+```sql
+-- Use as TimeUUID
+CREATE TABLE events (id TIMEUUID PRIMARY KEY, data TEXT);
+INSERT INTO events (id, data) VALUES (now(), 'Event data');
+
+-- Multiple calls generate different UUIDs
+INSERT INTO events (id, data) VALUES (now(), 'Event 1');
+INSERT INTO events (id, data) VALUES (now(), 'Event 2');
+
+-- Use in WHERE clauses for time-based queries
+SELECT * FROM events WHERE id <= now();
+```
+
+**Note**: Each call to `now()` generates a unique TimeUUID with the current timestamp and a random component.
+
+### minTimeuuid()
+
+Generates the minimum possible TimeUUID for a given timestamp.
+
+**Syntax**:
+
+```sql
+minTimeuuid(timestamp)
+```
+
+**Parameters**:
+- `timestamp`: TIMESTAMP value or milliseconds since epoch
+
+**Example**:
+
+```sql
+-- Find events after a specific time
+SELECT * FROM events 
+WHERE id >= minTimeuuid('2024-01-15 00:00:00');
+
+-- Using milliseconds
+SELECT * FROM events 
+WHERE id >= minTimeuuid(1705276800000);
+
+-- Time range query
+SELECT * FROM events
+WHERE id >= minTimeuuid('2024-01-01') 
+  AND id < maxTimeuuid('2024-02-01');
+```
+
+### maxTimeuuid()
+
+Generates the maximum possible TimeUUID for a given timestamp.
+
+**Syntax**:
+
+```sql
+maxTimeuuid(timestamp)
+```
+
+**Parameters**:
+- `timestamp`: TIMESTAMP value or milliseconds since epoch
+
+**Example**:
+
+```sql
+-- Find events before a specific time
+SELECT * FROM events 
+WHERE id < maxTimeuuid('2024-01-15 23:59:59');
+
+-- Events within a day
+SELECT * FROM events
+WHERE id >= minTimeuuid('2024-01-15')
+  AND id <= maxTimeuuid('2024-01-15');
+```
+
+## Timestamp Functions
+
+### toTimestamp()
+
+Converts a TimeUUID to a TIMESTAMP.
+
+**Syntax**:
+
+```sql
+toTimestamp(timeuuid)
+```
+
+**Example**:
+
+```sql
+-- Extract timestamp from TimeUUID
+SELECT id, toTimestamp(id) as event_time, data FROM events;
+
+-- Use with now()
+INSERT INTO logs (id, created_at, message)
+VALUES (uuid(), toTimestamp(now()), 'Log message');
+
+-- Filter by converted timestamp
+SELECT * FROM events
+WHERE toTimestamp(id) >= '2024-01-01'
+ALLOW FILTERING;
+```
+
+### currentTimestamp()
+
+Returns the current timestamp with microsecond precision.
+
+**Syntax**:
+
+```sql
+currentTimestamp()
+```
+
+**Example**:
+
+```sql
+INSERT INTO events (id, created_at, data)
+VALUES (uuid(), currentTimestamp(), 'Event data');
+
+SELECT currentTimestamp() as now;
+```
+
+**Note**: With the flag `cql_revert_to_partial_microsecond_support=true` (default), timestamps include microsecond precision.
+
+### toUnixTimestamp()
+
+Converts a TimeUUID or TIMESTAMP to Unix timestamp (milliseconds since epoch).
+
+**Syntax**:
+
+```sql
+toUnixTimestamp(timeuuid)
+toUnixTimestamp(timestamp)
+```
+
+**Example**:
+
+```sql
+-- From TimeUUID
+SELECT toUnixTimestamp(id) FROM events;
+
+-- From TIMESTAMP
+SELECT toUnixTimestamp(created_at) FROM users;
+
+-- Example values
+SELECT toUnixTimestamp(now());  -- Returns current time in milliseconds
+SELECT toUnixTimestamp('2024-01-15 10:30:00');  -- Returns 1705318200000
+```
+
+### unixTimestampOf()
+
+Alias for `toUnixTimestamp()` - converts TimeUUID to Unix timestamp.
+
+**Syntax**:
+
+```sql
+unixTimestampOf(timeuuid)
+```
+
+**Example**:
+
+```sql
+SELECT unixTimestampOf(id) as epoch_time FROM events;
+SELECT unixTimestampOf(now());
+```
+
+## Type Conversion Functions - To Blob
+
+Convert various data types to BLOB format.
+
+### booleanAsBlob()
+
+**Syntax**: `booleanAsBlob(boolean_value)`
+
+**Example**:
+
+```sql
+INSERT INTO data (id, blob_data) VALUES (1, booleanAsBlob(true));
+-- true -> 0x01, false -> 0x00
+```
+
+### tinyIntAsBlob()
+
+**Syntax**: `tinyIntAsBlob(tinyint_value)`
+
+**Example**:
+
+```sql
+INSERT INTO data (id, blob_data) VALUES (1, tinyIntAsBlob(121));
+-- 121 -> 0x79
+```
+
+### smallIntAsBlob()
+
+**Syntax**: `smallIntAsBlob(smallint_value)`
+
+**Example**:
+
+```sql
+INSERT INTO data (id, blob_data) VALUES (1, smallIntAsBlob(1992));
+-- 1992 -> 0x07c8
+```
+
+### intAsBlob()
+
+**Syntax**: `intAsBlob(int_value)`
+
+**Example**:
+
+```sql
+INSERT INTO data (id, blob_data) VALUES (1, intAsBlob(1992123));
+-- 1992123 -> 0x001e65bb
+```
+
+### bigIntAsBlob()
+
+**Syntax**: `bigIntAsBlob(bigint_value)`
+
+**Example**:
+
+```sql
+INSERT INTO data (id, blob_data) VALUES (1, bigIntAsBlob(1992123));
+-- 1992123 -> 0x00000000001e65bb
+```
+
+### floatAsBlob()
+
+**Syntax**: `floatAsBlob(float_value)`
+
+**Example**:
+
+```sql
+INSERT INTO data (id, blob_data) VALUES (1, floatAsBlob(17.31));
+-- 17.31 -> 0x418a7ae1 (IEEE 754 format)
+```
+
+### doubleAsBlob()
+
+**Syntax**: `doubleAsBlob(double_value)`
+
+**Example**:
+
+```sql
+INSERT INTO data (id, blob_data) VALUES (1, doubleAsBlob(19213.223));
+-- 19213.223 -> 0x40d2c34e45a1cac1 (IEEE 754 format)
+```
+
+### textAsBlob() / varcharAsBlob()
+
+**Syntax**: `textAsBlob(text_value)` or `varcharAsBlob(varchar_value)`
+
+**Example**:
+
+```sql
+INSERT INTO data (id, blob_data) VALUES (1, textAsBlob('Hello'));
+-- 'Hello' -> 0x48656c6c6f (UTF-8 encoding)
+
+INSERT INTO data (id, blob_data) VALUES (2, textAsBlob('Hello World!'));
+-- 'Hello World!' -> 0x48656c6c6f20576f726c6421
+```
+
+### timestampAsBlob()
+
+**Syntax**: `timestampAsBlob(timestamp_value)`
+
+**Example**:
+
+```sql
+INSERT INTO data (id, blob_data) VALUES (1, timestampAsBlob(1516326741100));
+-- 1516326741100 -> 0x000001610c1de46c
+```
+
+### uuidAsBlob()
+
+**Syntax**: `uuidAsBlob(uuid_value)`
+
+**Example**:
+
+```sql
+INSERT INTO data (id, blob_data) 
+VALUES (1, uuidAsBlob(fa713975-2630-4e37-aaef-465ab850b986));
+-- UUID -> 0xfa71397526304e37aaef465ab850b986
+```
+
+### timeuuidAsBlob()
+
+**Syntax**: `timeuuidAsBlob(timeuuid_value)`
+
+**Example**:
+
+```sql
+INSERT INTO data (id, blob_data) 
+VALUES (1, timeuuidAsBlob(799cb5a0-5810-11e8-9c2d-fa7ae01bbebc));
+-- TimeUUID -> 0x799cb5a0581011e89c2dfa7ae01bbebc
+```
+
+## Type Conversion Functions - From Blob
+
+Convert BLOB format back to various data types.
+
+### blobAsBoolean()
+
+**Syntax**: `blobAsBoolean(blob_value)`
+
+**Example**:
+
+```sql
+SELECT blobAsBoolean(0x01);  -- Returns true
+SELECT blobAsBoolean(0x00);  -- Returns false
+```
+
+### blobAsTinyInt()
+
+**Syntax**: `blobAsTinyInt(blob_value)`
+
+**Example**:
+
+```sql
+SELECT blobAsTinyInt(0x79);  -- Returns 121
+SELECT blobAsTinyInt(0xed);  -- Returns -19
+```
+
+### blobAsSmallInt()
+
+**Syntax**: `blobAsSmallInt(blob_value)`
+
+**Example**:
+
+```sql
+SELECT blobAsSmallInt(0x07c8);  -- Returns 1992
+```
+
+### blobAsInt()
+
+**Syntax**: `blobAsInt(blob_value)`
+
+**Example**:
+
+```sql
+SELECT blobAsInt(0x001e65bb);  -- Returns 1992123
+```
+
+### blobAsBigInt()
+
+**Syntax**: `blobAsBigInt(blob_value)`
+
+**Example**:
+
+```sql
+SELECT blobAsBigInt(0x00000000001e65bb);  -- Returns 1992123
+```
+
+### blobAsFloat()
+
+**Syntax**: `blobAsFloat(blob_value)`
+
+**Example**:
+
+```sql
+SELECT blobAsFloat(0x418a7ae1);  -- Returns ~17.31
+```
+
+### blobAsDouble()
+
+**Syntax**: `blobAsDouble(blob_value)`
+
+**Example**:
+
+```sql
+SELECT blobAsDouble(0x40d2c34e45a1cac1);  -- Returns ~19213.223
+```
+
+### blobAsText() / blobAsVarchar()
+
+**Syntax**: `blobAsText(blob_value)` or `blobAsVarchar(blob_value)`
+
+**Example**:
+
+```sql
+SELECT blobAsText(0x48656c6c6f);  -- Returns 'Hello'
+SELECT blobAsVarchar(0x48656c6c6f20576f726c6421);  -- Returns 'Hello World!'
+```
+
+### blobAsTimestamp()
+
+**Syntax**: `blobAsTimestamp(blob_value)`
+
+**Example**:
+
+```sql
+SELECT blobAsTimestamp(0x000001610c1de46c);  -- Returns timestamp
+```
+
+### blobAsUuid()
+
+**Syntax**: `blobAsUuid(blob_value)`
+
+**Example**:
+
+```sql
+SELECT blobAsUuid(0xfa71397526304e37aaef465ab850b986);
+-- Returns: fa713975-2630-4e37-aaef-465ab850b986
+```
+
+### blobAsTimeuuid()
+
+**Syntax**: `blobAsTimeuuid(blob_value)`
+
+**Example**:
+
+```sql
+SELECT blobAsTimeuuid(0x799cb5a0581011e89c2dfa7ae01bbebc);
+-- Returns: 799cb5a0-5810-11e8-9c2d-fa7ae01bbebc
+```
+
+## Practical Examples
+
+### Working with Blobs in Collections
+
+```sql
+CREATE TABLE binary_data (
+  id INT PRIMARY KEY,
+  values MAP<INT, BLOB>,
+  blob_set SET<BLOB>,
+  blob_list LIST<BLOB>
+);
+
+-- Insert using conversion functions
+INSERT INTO binary_data (id, values, blob_set, blob_list)
+VALUES (
+  1,
+  {1: intAsBlob(42), 2: textAsBlob('hello')},
+  {intAsBlob(1), intAsBlob(2)},
+  [intAsBlob(10), textAsBlob('data')]
+);
+```
+
+### Time-Based Queries with TimeUUIDs
+
+```sql
+CREATE TABLE events (
+  id TIMEUUID PRIMARY KEY,
+  event_type TEXT,
+  data JSONB
+);
+
+-- Insert events
+INSERT INTO events (id, event_type, data) VALUES (now(), 'login', '{"user": 1}');
+INSERT INTO events (id, event_type, data) VALUES (now(), 'logout', '{"user": 1}');
+
+-- Query events from last hour
+SELECT id, toTimestamp(id) as time, event_type 
+FROM events
+WHERE id >= minTimeuuid('2024-01-15 10:00:00')
+  AND id < maxTimeuuid('2024-01-15 11:00:00');
+
+-- Get Unix timestamp from TimeUUID
+SELECT unixTimestampOf(id), event_type FROM events;
+```
+
+### Timestamp Precision Control
+
+```sql
+-- Using currentTimestamp() for microsecond precision
+CREATE TABLE precise_events (
+  id INT PRIMARY KEY,
+  created_at TIMESTAMP
+);
+
+INSERT INTO precise_events (id, created_at) 
+VALUES (1, currentTimestamp());
+
+-- With flag: cql_revert_to_partial_microsecond_support=true (default)
+-- Timestamps include microseconds: 2024-08-26 09:23:38.319213+0000
+
+-- With flag: cql_revert_to_partial_microsecond_support=false
+-- Timestamps use milliseconds: 2024-08-26 09:23:38.319000+0000
+```
+
+### Type Conversion Round-Trip
+
+```sql
+CREATE TABLE conversion_test (
+  id INT PRIMARY KEY,
+  original_int INT,
+  as_blob BLOB,
+  back_to_int INT
+);
+
+-- Convert to blob and back
+INSERT INTO conversion_test (id, original_int, as_blob)
+VALUES (1, 42, intAsBlob(42));
+
+UPDATE conversion_test 
+SET back_to_int = blobAsInt(as_blob)
+WHERE id = 1;
+
+SELECT original_int, back_to_int FROM conversion_test;
+-- Both columns show: 42
+```
+
+## Best Practices
+
+1. **Use prepared statements with functions**: Better performance for repeated operations
+2. **TimeUUID for time-series data**: Provides both ordering and uniqueness
+3. **Blob conversions for compatibility**: Useful when interfacing with external systems
+4. **Aggregate with GROUP BY**: Combine aggregate functions with grouping for analytics
+5. **minTimeuuid/maxTimeuuid for time ranges**: Efficient time-based queries on TimeUUID columns
+6. **currentTimestamp() vs now()**: Use `currentTimestamp()` for TIMESTAMP columns, `now()` for TIMEUUID columns
+
+## Function Compatibility Notes
+
+- All TimeUUID functions are compatible with Apache Cassandra
+- Blob conversion functions follow Cassandra's binary encoding
+- Aggregate functions support standard CQL syntax
+- Timestamp functions support both millisecond and microsecond precision (configured via flags)

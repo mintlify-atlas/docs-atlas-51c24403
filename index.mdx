@@ -1,97 +1,279 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "YugabyteDB Documentation"
+description: "PostgreSQL-compatible distributed SQL database for cloud-native, mission-critical applications"
+mode: "custom"
 ---
 
-## Setting up
+<div className="relative overflow-hidden bg-gradient-to-br from-[#0D0B14] via-[#1a1524] to-[#0D0B14] dark:from-[#0D0B14] dark:via-[#1a1524] dark:to-[#0D0B14] text-white py-20">
+  <div className="max-w-6xl mx-auto px-6 lg:px-8">
+    <div className="grid lg:grid-cols-2 gap-12 items-center">
+      <div>
+        <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold mb-6 text-white dark:text-white">
+          Distributed SQL for Mission-Critical Applications
+        </h1>
+        <p className="text-lg sm:text-xl text-gray-300 dark:text-gray-300 mb-8 max-w-2xl">
+          YugabyteDB is a PostgreSQL-compatible distributed SQL database that combines transactional consistency with horizontal scalability. Build applications that require absolute data correctness at any scale.
+        </p>
+        <div className="flex flex-wrap gap-4">
+          <a
+            href="/quick-start"
+            className="inline-flex items-center px-6 py-3 rounded-lg bg-[#fa6140] hover:bg-[#e55535] text-white font-semibold transition-colors no-underline"
+          >
+            Get Started
+            <svg className="ml-2 w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+            </svg>
+          </a>
+          <a
+            href="/api/ysql/overview"
+            className="inline-flex items-center px-6 py-3 rounded-lg border border-white/30 bg-white/10 hover:bg-white/20 text-white font-semibold transition-colors no-underline"
+          >
+            Explore API Reference
+          </a>
+        </div>
+      </div>
+      <div className="hidden lg:block">
+        <div className="relative">
+          <div className="absolute inset-0 bg-gradient-to-r from-[#fa6140]/20 to-[#ebb49b]/20 blur-3xl"></div>
+          <img
+            src="https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/architecture/images/yb-architecture.jpg"
+            alt="YugabyteDB Architecture"
+            className="relative rounded-2xl shadow-2xl w-full h-auto"
+            noZoom
+          />
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
 
-Get your documentation site up and running in minutes.
+<div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+  <h2 className="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white mb-3">
+    Quick start
+  </h2>
+  <p className="text-base text-gray-600 dark:text-gray-400 mb-8">
+    Get YugabyteDB running locally in minutes
+  </p>
 
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
+  <Steps>
+    <Step title="Install YugabyteDB">
+      Download and install YugabyteDB using the yugabyted utility:
+      
+      ```bash
+      wget https://downloads.yugabyte.com/releases/2025.1.0.0/yugabyte-2025.1.0.0-linux-x86_64.tar.gz
+      tar xvfz yugabyte-2025.1.0.0-linux-x86_64.tar.gz && cd yugabyte-2025.1.0.0/
+      ./bin/yugabyted start
+      ```
+    </Step>
 
-## Make it yours
+    <Step title="Connect with YSQL">
+      Connect to your cluster using the PostgreSQL-compatible YSQL API:
+      
+      ```bash
+      ./bin/ysqlsh
+      ```
+      
+      You'll see a PostgreSQL prompt ready for SQL commands.
+    </Step>
 
-Design a docs site that looks great and empowers your users.
+    <Step title="Create your first table">
+      Create a distributed table and insert data:
+      
+      ```sql
+      CREATE TABLE users (
+        id SERIAL PRIMARY KEY,
+        username VARCHAR(50) UNIQUE NOT NULL,
+        email VARCHAR(100) NOT NULL,
+        created_at TIMESTAMP DEFAULT NOW()
+      );
 
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
-  </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
-  </Card>
+      INSERT INTO users (username, email) 
+      VALUES ('alice', 'alice@example.com');
+      
+      SELECT * FROM users;
+      ```
+    </Step>
+
+    <Step title="Explore distributed features">
+      View tablet distribution across nodes:
+      
+      ```sql
+      SELECT * FROM yb_local_tablets;
+      ```
+      
+      <Note>
+        Your data is automatically sharded and replicated across nodes for high availability.
+      </Note>
+    </Step>
+  </Steps>
+</div>
+
+<div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+  <h2 className="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white mb-3">
+    Explore by topic
+  </h2>
+  <p className="text-base text-gray-600 dark:text-gray-400 mb-8">
+    Learn about YugabyteDB's core capabilities and how to use them
+  </p>
+
+  <CardGroup cols={2}>
     <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
-  </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
-  </Card>
-</Columns>
+      title="Core concepts"
+      icon="cube"
+      href="/concepts/architecture"
+    >
+      Understand YugabyteDB's distributed architecture, data model, and transaction guarantees
+    </Card>
+    <Card
+      title="Deploy anywhere"
+      icon="cloud"
+      href="/deploy/overview"
+    >
+      Run on Docker, Kubernetes, or cloud providers with multi-region support
+    </Card>
+    <Card
+      title="Build applications"
+      icon="code"
+      href="/develop/build-apps"
+    >
+      Connect using PostgreSQL drivers and ORMs in Java, Python, Node.js, Go, and more
+    </Card>
+    <Card
+      title="Operations guide"
+      icon="gears"
+      href="/operations/admin-guide"
+    >
+      Backup, restore, monitor, and tune your production clusters
+    </Card>
+    <Card
+      title="Secure your data"
+      icon="shield-halved"
+      href="/security/authentication"
+    >
+      Configure authentication, authorization, and encryption for enterprise security
+    </Card>
+    <Card
+      title="Advanced features"
+      icon="wand-magic-sparkles"
+      href="/advanced/change-data-capture"
+    >
+      Use CDC, xCluster replication, read replicas, and vector search with pgvector
+    </Card>
+  </CardGroup>
+</div>
 
-## Create beautiful pages
+<div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+  <h2 className="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white mb-3">
+    API reference
+  </h2>
+  <p className="text-base text-gray-600 dark:text-gray-400 mb-8">
+    Complete reference for SQL APIs, drivers, and CLI tools
+  </p>
 
-Everything you need to create world-class documentation.
+  <CardGroup cols={3}>
+    <Card
+      title="YSQL API"
+      icon="database"
+      href="/api/ysql/overview"
+    >
+      PostgreSQL-compatible SQL API with distributed transactions
+    </Card>
+    <Card
+      title="YCQL API"
+      icon="table"
+      href="/api/ycql/overview"
+    >
+      Cassandra-compatible API for semi-relational workloads
+    </Card>
+    <Card
+      title="Client drivers"
+      icon="plug"
+      href="/api/client/java"
+    >
+      Native drivers for Java, Python, Node.js, Go, and C++
+    </Card>
+    <Card
+      title="yugabyted"
+      icon="terminal"
+      href="/api/cli/yugabyted"
+    >
+      Cluster management CLI for local and production deployments
+    </Card>
+    <Card
+      title="ysqlsh"
+      icon="dollar-sign"
+      href="/api/cli/ysqlsh"
+    >
+      Interactive PostgreSQL shell for YSQL queries
+    </Card>
+    <Card
+      title="yb-admin"
+      icon="screwdriver-wrench"
+      href="/api/cli/yb-admin"
+    >
+      Advanced cluster administration and debugging tool
+    </Card>
+  </CardGroup>
+</div>
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+<div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+  <h2 className="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white mb-3">
+    Resources and community
+  </h2>
+  <p className="text-base text-gray-600 dark:text-gray-400 mb-8">
+    Get help, connect with other users, and stay up to date
+  </p>
 
-## Need inspiration?
+  <CardGroup cols={2}>
+    <Card
+      title="Community Slack"
+      icon="slack"
+      href="https://communityinviter.com/apps/yugabyte-db/register"
+    >
+      Join our Slack community to ask questions and share knowledge
+    </Card>
+    <Card
+      title="Discussion forum"
+      icon="comments"
+      href="https://forum.yugabyte.com"
+    >
+      Browse discussions, RFCs, and design proposals
+    </Card>
+    <Card
+      title="GitHub repository"
+      icon="github"
+      href="https://github.com/yugabyte/yugabyte-db"
+    >
+      Report issues, request features, and contribute code
+    </Card>
+    <Card
+      title="Stack Overflow"
+      icon="stack-overflow"
+      href="https://stackoverflow.com/questions/tagged/yugabyte-db"
+    >
+      Find answers to common questions and troubleshooting tips
+    </Card>
+  </CardGroup>
+</div>
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+<div className="mt-20 mb-16 max-w-5xl mx-auto px-6">
+  <div className="rounded-2xl border border-gray-200 dark:border-[#27272a] bg-gray-50 dark:bg-[#1a1d27] p-8 sm:p-12">
+    <div className="max-w-3xl mx-auto text-center">
+      <h2 className="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white mb-4">
+        Ready to build with YugabyteDB?
+      </h2>
+      <p className="text-base text-gray-600 dark:text-gray-400 mb-6">
+        Start with our quick start guide or explore the full documentation to learn how to deploy, develop, and operate YugabyteDB at scale.
+      </p>
+      <a
+        href="/quick-start"
+        className="inline-flex items-center px-6 py-3 rounded-lg bg-[#fa6140] hover:bg-[#e55535] text-white font-semibold transition-colors no-underline"
+      >
+        Get Started Now
+        <svg className="ml-2 w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+        </svg>
+      </a>
+    </div>
+  </div>
+</div>

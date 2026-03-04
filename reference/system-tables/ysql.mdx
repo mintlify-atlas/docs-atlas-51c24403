@@ -1,0 +1,441 @@
+---
+title: YSQL System Tables
+description: Reference for YugabyteDB-specific YSQL system catalog tables and views
+---
+
+YugabyteDB extends PostgreSQL's system catalog with additional tables and views specific to distributed database features. These system tables provide visibility into catalog versioning, tablegroups, profiles, and cluster metadata.
+
+## YugabyteDB System Tables
+
+YugabyteDB adds the following system tables to the PostgreSQL catalog:
+
+### pg_yb_catalog_version
+
+Tracks the catalog version for each database to maintain consistency across distributed nodes.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `db_oid` | oid | OID of the database (primary key) |
+| `current_version` | int64 | Current version of the catalog |
+| `last_breaking_version` | int64 | Last version that invalidated ongoing transactions |
+
+**Example Query:**
+
+```sql
+SELECT d.datname, cv.current_version, cv.last_breaking_version
+FROM pg_yb_catalog_version cv
+JOIN pg_database d ON d.oid = cv.db_oid;
+```
+
+### pg_yb_tablegroup
+
+Stores information about tablegroups, which allow co-locating multiple tables for improved performance.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `oid` | oid | Tablegroup OID (primary key) |
+| `grpname` | name | Tablegroup name |
+| `grpowner` | oid | OID of the tablegroup owner |
+| `grptablespace` | oid | Tablespace OID for the tablegroup |
+| `grpacl` | aclitem[] | Access permissions |
+| `grpoptions` | text[] | Per-tablegroup options |
+
+**Example Query:**
+
+```sql
+SELECT tg.grpname, r.rolname as owner, ts.spcname as tablespace
+FROM pg_yb_tablegroup tg
+LEFT JOIN pg_roles r ON tg.grpowner = r.oid
+LEFT JOIN pg_tablespace ts ON tg.grptablespace = ts.oid;
+```
+
+### pg_yb_profile
+
+Defines authentication profiles for role-based password policies.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `oid` | oid | Profile OID (primary key) |
+| `prfname` | name | Profile name (unique) |
+| `prfmaxfailedloginattempts` | int32 | Maximum failed login attempts allowed |
+| `prfpasswordlocktime` | int32 | Account lock duration in seconds |
+
+**Example Query:**
+
+```sql
+SELECT prfname, 
+       prfmaxfailedloginattempts as max_failed_attempts,
+       prfpasswordlocktime as lock_time_seconds
+FROM pg_yb_profile
+ORDER BY prfname;
+```
+
+### pg_yb_role_profile
+
+Links roles to profiles and tracks their authentication status.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `oid` | oid | Record OID (primary key) |
+| `rolprfrole` | oid | OID of the role |
+| `rolprfprofile` | oid | OID of the profile |
+| `rolprfstatus` | char | Status: 'o' (OPEN) or 'l' (LOCKED) |
+| `rolprffailedloginattempts` | int32 | Number of failed login attempts |
+| `rolprflockeduntil` | timestamptz | Lock expiration timestamp (nullable) |
+
+**Example Query:**
+
+```sql
+SELECT r.rolname,
+       p.prfname,
+       CASE rp.rolprfstatus 
+         WHEN 'o' THEN 'OPEN'
+         WHEN 'l' THEN 'LOCKED'
+       END as status,
+       rp.rolprffailedloginattempts as failed_attempts,
+       rp.rolprflockeduntil as locked_until
+FROM pg_yb_role_profile rp
+JOIN pg_roles r ON rp.rolprfrole = r.oid
+JOIN pg_yb_profile p ON rp.rolprfprofile = p.oid;
+```
+
+### pg_yb_migration
+
+Tracks the history of catalog migrations applied to the database.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `major` | int32 | Major version of the migration |
+| `minor` | int32 | Minor version (for backported changes) |
+| `name` | name | Migration name or "baseline" for initdb |
+| `time_applied` | int64 | Timestamp in milliseconds (nullable) |
+
+**Example Query:**
+
+```sql
+SELECT major, minor, name,
+       CASE WHEN time_applied IS NOT NULL 
+         THEN to_timestamp(time_applied / 1000.0)
+         ELSE NULL
+       END as applied_at
+FROM pg_yb_migration
+ORDER BY major DESC, minor DESC;
+```
+
+### pg_yb_logical_client_version
+
+Tracks logical replication client versions for each database.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `db_oid` | oid | OID of the database (primary key) |
+| `current_version` | int64 | Current version of the logical client |
+
+**Example Query:**
+
+```sql
+SELECT d.datname, lcv.current_version
+FROM pg_yb_logical_client_version lcv
+JOIN pg_database d ON d.oid = lcv.db_oid;
+```
+
+### pg_yb_invalidation_messages
+
+Stores catalog invalidation messages for distributed cache coherency.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `db_oid` | oid | OID of the database |
+| `current_version` | int64 | Catalog version for this message |
+| `message_time` | int64 | Unix epoch timestamp in seconds |
+| `messages` | bytea | Serialized invalidation messages |
+
+**Primary Key:** (`db_oid`, `current_version`)
+
+**Example Query:**
+
+```sql
+SELECT d.datname,
+       im.current_version,
+       to_timestamp(im.message_time) as message_timestamp,
+       length(im.messages) as message_bytes
+FROM pg_yb_invalidation_messages im
+JOIN pg_database d ON d.oid = im.db_oid
+ORDER BY im.message_time DESC
+LIMIT 10;
+```
+
+## YugabyteDB System Views
+
+YugabyteDB provides additional system views for monitoring and diagnostics:
+
+### yb_terminated_queries
+
+Shows queries that have been terminated by the system.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `databasename` | name | Database name |
+| `backend_pid` | int | Backend process ID |
+| `query_id` | bigint | Query identifier |
+| `query_text` | text | SQL query text |
+| `termination_reason` | text | Reason for termination |
+| `query_start_time` | timestamptz | Query start timestamp |
+| `query_end_time` | timestamptz | Query end timestamp |
+
+**Example Query:**
+
+```sql
+SELECT databasename, backend_pid, 
+       substring(query_text, 1, 50) as query_snippet,
+       termination_reason,
+       query_end_time - query_start_time as duration
+FROM yb_terminated_queries
+ORDER BY query_end_time DESC
+LIMIT 20;
+```
+
+### yb_active_session_history
+
+Provides active session history for performance analysis.
+
+**Example Query:**
+
+```sql
+SELECT sample_time, wait_event_class, wait_event, 
+       query_id, pid, wait_event_type
+FROM yb_active_session_history
+WHERE sample_time > NOW() - INTERVAL '1 hour'
+ORDER BY sample_time DESC;
+```
+
+### yb_local_tablets
+
+Shows tablets hosted on the local tserver node.
+
+**Example Query:**
+
+```sql
+SELECT *
+FROM yb_local_tablets
+ORDER BY table_name, tablet_id;
+```
+
+### yb_tablet_metadata
+
+Provides metadata about tablets including their location and hash ranges.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `tablet_id` | text | Unique tablet identifier |
+| `oid` | oid | Table OID (nullable for system tables) |
+| `db_name` | text | Database/namespace name |
+| `relname` | text | Relation/table name |
+| `start_hash_code` | text | Start of hash range |
+| `end_hash_code` | text | End of hash range |
+| `leader` | text | Leader replica location |
+| `replicas` | text | All replica locations |
+
+**Example Query:**
+
+```sql
+SELECT relname, COUNT(*) as tablet_count,
+       COUNT(DISTINCT leader) as leader_count
+FROM yb_tablet_metadata
+WHERE db_name = current_database()
+GROUP BY relname
+ORDER BY tablet_count DESC;
+```
+
+### yb_wait_event_desc
+
+Describes all wait events available in the system.
+
+**Example Query:**
+
+```sql
+SELECT *
+FROM yb_wait_event_desc
+ORDER BY component, class, event;
+```
+
+### yb_query_diagnostics_status
+
+Shows the status of query diagnostics collection.
+
+**Example Query:**
+
+```sql
+SELECT *
+FROM yb_query_diagnostics_status;
+```
+
+### yb_servers_metrics
+
+Provides metrics for all tserver nodes in the cluster.
+
+**Example Query:**
+
+```sql
+SELECT *
+FROM yb_servers_metrics
+ORDER BY node_id;
+```
+
+### yb_pg_stat_plans
+
+Tracks execution statistics for query plans (similar to pg_stat_statements).
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `dbid` | oid | Database OID |
+| `userid` | oid | User OID |
+| `queryid` | bigint | Query identifier |
+| `planid` | bigint | Plan identifier |
+| `first_used` | timestamptz | First execution time |
+| `last_used` | timestamptz | Last execution time |
+| `hints` | text | Optimizer hints used |
+| `calls` | bigint | Number of executions |
+| `avg_exec_time` | float8 | Average execution time |
+| `max_exec_time` | float8 | Maximum execution time |
+| `max_exec_time_params` | text | Parameters for slowest execution |
+| `avg_est_cost` | float8 | Average estimated cost |
+| `plan` | text | Query plan text |
+
+**Example Query:**
+
+```sql
+SELECT d.datname, r.rolname, 
+       s.queryid, s.planid, 
+       s.calls, 
+       round(s.avg_exec_time::numeric, 2) as avg_time_ms,
+       s.hints
+FROM yb_pg_stat_plans s
+JOIN pg_database d ON s.dbid = d.oid
+JOIN pg_roles r ON s.userid = r.oid
+WHERE s.calls > 10
+ORDER BY s.avg_exec_time DESC
+LIMIT 20;
+```
+
+### yb_pg_stat_plans_insights
+
+Provides insights into query plan performance for optimization.
+
+**Example Query:**
+
+```sql
+SELECT queryid, planid,
+       round(avg_exec_time::numeric, 2) as avg_time,
+       round(min_avg_exec_time::numeric, 2) as best_time,
+       plan_require_evaluation,
+       plan_min_exec_time
+FROM yb_pg_stat_plans_insights
+WHERE plan_require_evaluation = 'Yes'
+ORDER BY queryid, avg_exec_time DESC;
+```
+
+## Monitoring Queries
+
+### Check Catalog Version Consistency
+
+```sql
+SELECT d.datname,
+       cv.current_version,
+       cv.last_breaking_version,
+       cv.current_version - cv.last_breaking_version as versions_since_break
+FROM pg_yb_catalog_version cv
+JOIN pg_database d ON d.oid = cv.db_oid
+ORDER BY d.datname;
+```
+
+### Monitor Locked Accounts
+
+```sql
+SELECT r.rolname,
+       p.prfname,
+       rp.rolprffailedloginattempts,
+       rp.rolprflockeduntil,
+       CASE WHEN rp.rolprflockeduntil > NOW() 
+         THEN 'LOCKED'
+         ELSE 'UNLOCKED'
+       END as current_status
+FROM pg_yb_role_profile rp
+JOIN pg_roles r ON rp.rolprfrole = r.oid
+JOIN pg_yb_profile p ON rp.rolprfprofile = p.oid
+WHERE rp.rolprfstatus = 'l'
+   OR rp.rolprffailedloginattempts > 0;
+```
+
+### Tablet Distribution Analysis
+
+```sql
+SELECT db_name, relname,
+       COUNT(*) as total_tablets,
+       COUNT(DISTINCT leader) as unique_leaders,
+       COUNT(DISTINCT replicas) as replica_locations
+FROM yb_tablet_metadata
+GROUP BY db_name, relname
+HAVING COUNT(*) > 1
+ORDER BY total_tablets DESC;
+```
+
+### Recent Catalog Changes
+
+```sql
+SELECT d.datname,
+       im.current_version,
+       to_timestamp(im.message_time) as change_time,
+       NOW() - to_timestamp(im.message_time) as age
+FROM pg_yb_invalidation_messages im
+JOIN pg_database d ON d.oid = im.db_oid
+WHERE im.message_time > extract(epoch from NOW() - INTERVAL '1 hour')
+ORDER BY im.message_time DESC;
+```
+
+## YugabyteDB System Functions
+
+The following functions interact with YugabyteDB system tables:
+
+### yb_reset_analyze_statistics
+
+Resets table statistics to trigger re-analysis.
+
+```sql
+SELECT yb_reset_analyze_statistics('my_table'::regclass);
+```
+
+### yb_is_database_colocated
+
+Checks if the current database uses colocation.
+
+```sql
+SELECT yb_is_database_colocated();
+```
+
+### yb_query_diagnostics
+
+Enables query diagnostics collection for a specific query ID.
+
+```sql
+SELECT yb_query_diagnostics(
+  query_id => 12345,
+  diagnostics_interval_sec => 300,
+  explain_sample_rate => 10,
+  explain_analyze => true
+);
+```
+
+### yb_cancel_query_diagnostics
+
+Cancels active query diagnostics collection.
+
+```sql
+SELECT yb_cancel_query_diagnostics(12345);
+```
+
+## See Also
+
+- [PostgreSQL System Catalogs](https://www.postgresql.org/docs/current/catalogs.html) - Standard PostgreSQL catalog tables
+- [YCQL System Tables](/reference/system-tables/ycql) - Cassandra-compatible system tables
+- [Monitoring](/deploy/monitor/) - Cluster monitoring and observability

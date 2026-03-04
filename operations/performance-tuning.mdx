@@ -1,0 +1,586 @@
+---
+title: Performance Tuning
+description: Optimize YugabyteDB cluster performance through configuration, resource management, and best practices
+---
+
+This guide covers performance tuning strategies for YugabyteDB clusters, including configuration flags, resource management, and optimization techniques.
+
+## Performance Fundamentals
+
+### Key Performance Metrics
+
+**Latency Metrics:**
+- Read latency (p50, p99, p999)
+- Write latency (p50, p99, p999)
+- Transaction latency
+- Replication lag
+
+**Throughput Metrics:**
+- Operations per second (reads/writes)
+- Queries per second
+- Network throughput
+- Disk I/O throughput
+
+**Resource Utilization:**
+- CPU usage per core
+- Memory utilization
+- Disk space and IOPS
+- Network bandwidth
+
+## Configuration Flags
+
+### YB-TServer Performance Flags
+
+**Core Server Configuration:**
+
+```bash
+# RPC and queue settings
+--tablet_server_svc_queue_length=5000
+--max_clock_skew_usec=500000  # 500ms default
+--rpc_workers_limit=64
+
+# Memory management
+--db_block_cache_size_bytes=8589934592  # 8GB
+--memstore_size_mb=1024  # 1GB per tablet
+--global_memstore_size_mb=2048
+
+# Data directories
+--fs_data_dirs=/mnt/disk1,/mnt/disk2,/mnt/disk3
+```
+
+**Connection and Threading:**
+
+```bash
+# PostgreSQL connections
+--ysql_max_connections=300
+--ysql_conn_mgr_max_client_connections=10000
+
+# Service threads
+--tablet_server_svc_num_threads=64
+--ts_consensus_svc_num_threads=64
+--ts_remote_bootstrap_svc_num_threads=10
+```
+
+**Compaction Settings:**
+
+```bash
+# Compaction threads and priorities
+--rocksdb_max_background_compactions=16
+--rocksdb_max_background_flushes=4
+--rocksdb_base_background_compactions=4
+
+# Compaction behavior
+--rocksdb_level0_file_num_compaction_trigger=4
+--rocksdb_level0_slowdown_writes_trigger=20
+--rocksdb_level0_stop_writes_trigger=32
+```
+
+### YB-Master Performance Flags
+
+```bash
+# Master RPC configuration
+--master_svc_queue_length=1000
+--master_svc_num_threads=32
+
+# Tablet splitting
+--tablet_split_size_threshold_bytes=10737418240  # 10GB
+--enable_automatic_tablet_splitting=true
+
+# Load balancing
+--load_balancer_max_concurrent_moves=10
+--load_balancer_max_concurrent_adds=1
+--load_balancer_max_concurrent_removals=1
+```
+
+## Memory Management
+
+### Block Cache Sizing
+
+The block cache stores recently accessed data blocks in memory.
+
+**Calculation:**
+```
+Recommended = (Total RAM - OS overhead - Other services) × 0.5 to 0.7
+
+Example for 64GB node:
+Block Cache = (64GB - 4GB - 8GB) × 0.6 = ~31GB
+```
+
+**Configuration:**
+```bash
+--db_block_cache_size_bytes=33285996544  # 31GB
+```
+
+**Monitoring:**
+- Cache hit rate (target: >95%)
+- Cache eviction rate
+- Memory pressure indicators
+
+### Memstore Configuration
+
+Memstores buffer writes before flushing to disk.
+
+**Per-Tablet Memstore:**
+```bash
+--memstore_size_mb=128  # Per tablet
+```
+
+**Global Memstore Limit:**
+```bash
+--global_memstore_size_mb=4096  # Total across all tablets
+```
+
+**Best Practices:**
+- Higher memstore = fewer flushes, more memory usage
+- Monitor flush frequency and write amplification
+- Adjust based on write patterns
+
+### Memory Pressure Handling
+
+```bash
+# Reject operations under memory pressure
+--memory_limit_soft_percentage=85
+--memory_limit_hard_percentage=95
+
+# Background task memory limits
+--server_tcmalloc_max_total_thread_cache_bytes=268435456  # 256MB
+```
+
+## Disk and I/O Optimization
+
+### Storage Configuration
+
+**Multiple Data Directories:**
+```bash
+--fs_data_dirs=/mnt/nvme1,/mnt/nvme2,/mnt/nvme3
+```
+
+Benefits:
+- Parallel I/O across devices
+- Better load distribution
+- Increased throughput
+
+**Write-Ahead Log (WAL):**
+```bash
+# WAL settings
+--fs_wal_dirs=/mnt/ssd1  # Separate fast disk for WAL
+--durable_wal_write=true
+--wal_segment_size_mb=64
+```
+
+### Compaction Tuning
+
+Compactions reorganize data on disk for efficient reads.
+
+**Strategies:**
+
+```bash
+# Universal compaction (default for YCQL)
+--rocksdb_universal_compaction_size_ratio=20
+--rocksdb_universal_compaction_min_merge_width=4
+
+# Level compaction (default for YSQL)
+--rocksdb_level0_file_num_compaction_trigger=4
+--rocksdb_max_file_size_for_compaction=209715200  # 200MB
+```
+
+**Resource Allocation:**
+```bash
+# Limit compaction impact
+--rocksdb_compact_flush_rate_limit_bytes_per_sec=268435456  # 256MB/s
+--priority_thread_pool_size=3
+```
+
+### I/O Scheduling
+
+**Disk Performance Requirements:**
+- **Minimum IOPS:** 1000 IOPS per TB
+- **Recommended:** NVMe SSD or high-performance SSD
+- **Latency target:** < 10ms for writes, < 5ms for reads
+
+**Monitoring Disk Health:**
+```bash
+# Check disk I/O utilization
+iostat -x 5
+
+# Monitor queue depth
+sar -d 5
+```
+
+## Network Optimization
+
+### Network Configuration
+
+```bash
+# RPC settings
+--rpc_bind_addresses=<private-ip>
+--server_broadcast_addresses=<public-ip>
+--use_private_ip=cloud  # Use private IPs within cloud
+
+# Connection pooling
+--num_connections_to_server=8
+--rpc_connection_timeout_ms=15000
+```
+
+### Compression
+
+```bash
+# Enable RPC compression for cross-AZ traffic
+--enable_stream_compression=true
+--stream_compression_algo=2  # LZ4
+```
+
+**When to Use:**
+- Cross-region replication
+- High-latency networks
+- Bandwidth-constrained environments
+
+**Trade-offs:**
+- Reduces network bandwidth (30-50%)
+- Increases CPU usage (5-10%)
+- Best for large data transfers
+
+## Query Performance
+
+### Connection Management
+
+**Connection Pooling:**
+```bash
+# Enable connection manager
+--enable_ysql_conn_mgr=true
+--ysql_conn_mgr_max_client_connections=10000
+--ysql_conn_mgr_num_workers=4
+```
+
+Benefits:
+- Reduced connection overhead
+- Better resource utilization
+- Support for more concurrent clients
+
+### Query Optimization
+
+**Prepared Statements:**
+- Use prepared statements for repeated queries
+- Reduces parsing overhead
+- Enables better query plan caching
+
+**Batch Operations:**
+```sql
+-- Instead of multiple INSERTs
+INSERT INTO table VALUES (1, 'a'), (2, 'b'), (3, 'c');
+
+-- Use COPY for bulk loads
+COPY table FROM '/data/file.csv' WITH (FORMAT csv);
+```
+
+**Index Optimization:**
+- Create indexes on frequently filtered columns
+- Use covering indexes to avoid table lookups
+- Monitor index usage and remove unused indexes
+- Consider partial indexes for filtered queries
+
+### Read Replicas
+
+Offload read traffic to dedicated read replicas:
+
+```bash
+yb-admin --master_addresses ip1:7100,ip2:7100,ip3:7100 \
+  add_read_replica_placement_info \
+  cloud.region.zone min_num_replicas
+```
+
+Benefits:
+- Isolate analytics workloads
+- Reduce load on primary cluster
+- Serve reads closer to users geographically
+
+## Tablet Management
+
+### Tablet Splitting
+
+Automatic tablet splitting improves performance as data grows.
+
+**Configuration:**
+```bash
+# Enable automatic splitting
+--enable_automatic_tablet_splitting=true
+--tablet_split_size_threshold_bytes=10737418240  # 10GB
+
+# Split limits
+--outstanding_tablet_split_limit=1
+--outstanding_tablet_split_limit_per_tserver=1
+```
+
+**When Splitting Helps:**
+- Tables outgrow initial tablet count
+- Range-scanned tables with unpredictable distribution
+- Hot spots on specific key ranges
+- Node count exceeds tablet count
+
+**Monitoring:**
+- Track tablet size distribution
+- Monitor split operations in master logs
+- Watch for overloaded tablets
+
+### Tablet Co-location
+
+Co-locate small tables to reduce tablet overhead:
+
+```sql
+-- Create co-located database
+CREATE DATABASE mydb WITH colocated = true;
+
+-- Tables automatically co-located
+CREATE TABLE small_table (id INT PRIMARY KEY, data TEXT);
+```
+
+**Benefits:**
+- Reduced memory overhead
+- Fewer Raft groups
+- Better resource utilization
+- Ideal for small reference tables
+
+## Replication and Consistency
+
+### Replication Factor
+
+```bash
+# Set replication factor at cluster creation
+yb-admin --master_addresses ip1:7100,ip2:7100,ip3:7100 \
+  modify_placement_info cloud.region.zone 3
+```
+
+**Trade-offs:**
+- RF=3: Standard, good balance
+- RF=5: Higher durability, more write latency
+- RF=1: Testing only, no fault tolerance
+
+### Read Consistency
+
+**Follower Reads:**
+```bash
+--yb_enable_read_committed_isolation=true
+--max_stale_read_bound_time_ms=10000  # 10 seconds staleness
+```
+
+**When to Use:**
+- Analytics queries tolerating staleness
+- Read-heavy workloads
+- Geo-distributed reads from local replicas
+
+## Clock Skew Management
+
+### Time Synchronization
+
+**NTP Configuration:**
+```bash
+# Check NTP status
+timedatectl status
+ntpq -p
+
+# Monitor clock skew
+watch -n 1 'ntpq -p | grep "*"'
+```
+
+**Clock Skew Impact:**
+```bash
+--max_clock_skew_usec=500000  # Default: 500ms
+```
+
+**Lower skew benefits:**
+- Reduced transaction latency
+- Tighter timestamp bounds
+- Better snapshot isolation
+
+**Using Clockbound (Advanced):**
+```bash
+--time_source=clockbound
+--max_clock_skew_usec=50000  # 50ms with synchronized clocks
+```
+
+Requires:
+- Hardware time sync (PTP, GPS, atomic clock)
+- Clockbound daemon on all nodes
+- Sub-millisecond clock accuracy
+
+## Load Balancing
+
+### Cluster Balancing
+
+```bash
+# Balance tablet leaders across nodes
+yb-admin --master_addresses ip1:7100,ip2:7100,ip3:7100 \
+  set_load_balancer_enabled true
+
+# Check load balancer status
+yb-admin --master_addresses ip1:7100,ip2:7100,ip3:7100 \
+  get_load_balancer_state
+```
+
+**Balancing Parameters:**
+```bash
+--load_balancer_max_concurrent_moves=10
+--load_balancer_max_concurrent_tablet_remote_bootstraps=10
+--load_balancer_max_concurrent_tablet_remote_bootstraps_per_table=2
+```
+
+### Preferred Leaders
+
+Pin leaders to specific zones for read performance:
+
+```bash
+yb-admin --master_addresses ip1:7100,ip2:7100,ip3:7100 \
+  set_preferred_zones cloud.region.zone1:1 cloud.region.zone2:2
+```
+
+Benefits:
+- Reduced read latency in primary zone
+- Predictable failover behavior
+- Optimized for asymmetric read/write patterns
+
+## Troubleshooting Performance
+
+### Slow Query Analysis
+
+**Enable slow query logging:**
+```bash
+--ysql_log_min_duration_statement=1000  # Log queries > 1 second
+```
+
+**Analyze slow queries:**
+```sql
+-- PostgreSQL pg_stat_statements
+SELECT query, calls, mean_exec_time, max_exec_time
+FROM pg_stat_statements
+ORDER BY mean_exec_time DESC
+LIMIT 10;
+```
+
+### RPC Slow Logs
+
+Slow RPCs (>75% of timeout) are logged with detailed traces:
+
+```
+W0325 06:47:13.032176 inbound_call.cc:204] 
+  Call ConsensusService.UpdateConsensus took 2644ms (timeout 1000ms)
+Trace:
+  0325 06:47:10.388015 (+0us) Inserting onto call queue
+  0325 06:47:10.394859 (+6844us) Handling call
+  0325 06:47:13.032064 (+2581367us) Filling consensus response
+```
+
+**Common causes:**
+- Lock contention
+- Disk I/O saturation
+- Network delays
+- Large batch operations
+
+### Memory Analysis
+
+**Check memory usage:**
+```bash
+# Via metrics endpoint
+curl http://tserver-ip:9000/mem-trackers
+
+# Via command line
+free -h
+cat /proc/meminfo
+```
+
+**Memory pressure indicators:**
+- High swap usage
+- Frequent compaction stalls
+- OOM killer activations
+- Slow allocation times
+
+### Compaction Issues
+
+**Signs of compaction problems:**
+- Increasing read latency
+- Growing disk usage
+- Level-0 file accumulation
+- Write stalls
+
+**Diagnosis:**
+```bash
+# Check compaction stats at metrics endpoint
+curl http://tserver-ip:9000/metrics
+
+# Look for:
+# - rocksdb_compaction_pending
+# - rocksdb_num_running_compactions
+# - rocksdb_estimate_pending_compaction_bytes
+```
+
+**Resolution:**
+- Increase compaction threads
+- Reduce write rate temporarily
+- Add more disk throughput
+- Adjust compaction triggers
+
+## Performance Benchmarking
+
+### Baseline Metrics
+
+Establish baseline performance for your workload:
+
+```bash
+# YSQL workload
+yb-sample-apps --workload SqlInserts \
+  --nodes ip1:5433,ip2:5433,ip3:5433 \
+  --num_threads_write 32 \
+  --num_threads_read 64
+
+# YCQL workload
+yb-sample-apps --workload CassandraBatchKeyValue \
+  --nodes ip1:9042,ip2:9042,ip3:9042 \
+  --num_threads_write 32
+```
+
+### Load Testing
+
+**Incremental load testing:**
+1. Start with 25% of target load
+2. Monitor metrics for 1 hour
+3. Increase by 25% increments
+4. Identify breaking point
+5. Configure for 70-80% of max capacity
+
+**Metrics to track:**
+- Latency percentiles (p50, p99, p999)
+- CPU utilization per node
+- Disk IOPS and throughput
+- Network bandwidth
+- Memory usage and pressure
+
+## Best Practices Summary
+
+### Resource Allocation
+
+1. **CPU**: 16+ cores per node, less than 70% average utilization
+2. **Memory**: 32-64GB+, 50% for block cache
+3. **Disk**: NVMe SSD, 1000+ IOPS/TB, less than 70% utilization
+4. **Network**: 10Gbps+, less than 50% utilization
+
+### Configuration Priorities
+
+1. **Size block cache** appropriately (50-70% of RAM)
+2. **Configure multiple data directories** for parallel I/O
+3. **Enable automatic tablet splitting** for growing tables
+4. **Set appropriate compaction threads** based on cores
+5. **Use connection pooling** for high-concurrency workloads
+
+### Monitoring and Maintenance
+
+1. **Monitor key metrics** continuously (latency, throughput, resources)
+2. **Review slow queries** regularly and optimize
+3. **Check compaction health** and adjust if needed
+4. **Balance load** across nodes periodically
+5. **Test configuration changes** in staging first
+
+## Next Steps
+
+- [Monitoring](/operations/monitoring) - Set up comprehensive performance monitoring
+- [Troubleshooting](/operations/troubleshooting) - Diagnose performance issues
+- [Admin Guide](/operations/admin-guide) - Administrative operations
+- [Backup and Restore](/operations/backup-restore) - Backup performance considerations

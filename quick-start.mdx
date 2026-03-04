@@ -1,0 +1,472 @@
+---
+title: Quick start guide
+description: Get YugabyteDB running on your local machine in under 5 minutes
+---
+
+Get your first YugabyteDB cluster up and running in under 5 minutes. This guide walks you through installation, cluster creation, and running your first SQL queries.
+
+## Prerequisites
+
+Before you begin, ensure your system meets the following requirements:
+
+<Tabs>
+  <Tab title="Linux">
+    **Operating system**
+    - CentOS 7 or later
+    - Ubuntu 18.04 or later
+    - Red Hat Enterprise Linux (RHEL) 7 or later
+
+    **Software**
+    - Python 3.6 or later
+    - wget or curl
+
+    **Hardware**
+    - 2 CPU cores (4 recommended)
+    - 4 GB RAM minimum (8 GB recommended)
+    - 10 GB disk space
+  </Tab>
+
+  <Tab title="macOS">
+    **Operating system**
+    - macOS 10.13 (High Sierra) or later
+    - Apple Silicon (M1/M2) or Intel processors supported
+
+    **Software**
+    - Python 3.6 or later (usually pre-installed)
+    - Xcode command line tools
+
+    **Hardware**
+    - 2 CPU cores (4 recommended)
+    - 4 GB RAM minimum (8 GB recommended)
+    - 10 GB disk space
+  </Tab>
+
+  <Tab title="Docker">
+    **Docker runtime**
+    - Docker 20.10 or later
+    - Docker Desktop (for Mac/Windows)
+    - Docker Engine (for Linux)
+
+    **Resources**
+    - 4 GB RAM allocated to Docker
+    - 10 GB disk space
+
+    <Warning>
+    Running stateful applications like YugabyteDB in Docker is more complex than stateless apps. Docker is recommended for testing only.
+    </Warning>
+  </Tab>
+</Tabs>
+
+## Step 1: Download YugabyteDB
+
+Download the latest stable release of YugabyteDB:
+
+<Tabs>
+  <Tab title="Linux (x86)">
+    ```bash
+    wget https://downloads.yugabyte.com/releases/2025.2.0.0/yugabyte-2025.2.0.0-b2-linux-x86_64.tar.gz
+    
+    # Verify checksum
+    echo "$(curl -L https://downloads.yugabyte.com/releases/2025.2.0.0/yugabyte-2025.2.0.0-b2-linux-x86_64-tar.gz.sha) *yugabyte-2025.2.0.0-b2-linux-x86_64.tar.gz" | shasum --check
+    
+    # Extract
+    tar xvfz yugabyte-2025.2.0.0-b2-linux-x86_64.tar.gz
+    cd yugabyte-2025.2.0.0/
+    ```
+  </Tab>
+
+  <Tab title="Linux (ARM)">
+    ```bash
+    wget https://downloads.yugabyte.com/releases/2025.2.0.0/yugabyte-2025.2.0.0-b2-el8-aarch64.tar.gz
+    
+    # Verify checksum
+    echo "$(curl -L https://downloads.yugabyte.com/releases/2025.2.0.0/yugabyte-2025.2.0.0-b2-el8-aarch64-tar.gz.sha) *yugabyte-2025.2.0.0-b2-el8-aarch64.tar.gz" | shasum --check
+    
+    # Extract
+    tar xvfz yugabyte-2025.2.0.0-b2-el8-aarch64.tar.gz
+    cd yugabyte-2025.2.0.0/
+    ```
+  </Tab>
+
+  <Tab title="macOS">
+    ```bash
+    # Download for your architecture
+    wget https://downloads.yugabyte.com/releases/2025.2.0.0/yugabyte-2025.2.0.0-b2-darwin-x86_64.tar.gz
+    
+    # Extract
+    tar xvfz yugabyte-2025.2.0.0-b2-darwin-x86_64.tar.gz
+    cd yugabyte-2025.2.0.0/
+    ```
+  </Tab>
+
+  <Tab title="Docker">
+    ```bash
+    # Pull the latest image
+    docker pull yugabytedb/yugabyte:2025.2.0.0-b2
+    ```
+  </Tab>
+</Tabs>
+
+<Note>
+For the latest version numbers and download links, visit the [YugabyteDB releases page](https://docs.yugabyte.com/stable/releases/).
+</Note>
+
+## Step 2: Configure YugabyteDB
+
+<Tabs>
+  <Tab title="Linux / macOS">
+    Run the post-installation script to configure YugabyteDB:
+
+    ```bash
+    ./bin/post_install.sh
+    ```
+
+    This script:
+    - Sets up the necessary directory structure
+    - Configures system libraries
+    - Prepares the environment for running YugabyteDB
+  </Tab>
+
+  <Tab title="Docker">
+    No configuration needed. Docker images come pre-configured.
+  </Tab>
+</Tabs>
+
+## Step 3: Start a local cluster
+
+Create a single-node cluster for local development:
+
+<Tabs>
+  <Tab title="Linux / macOS">
+    ```bash
+    ./bin/yugabyted start --advertise_address=127.0.0.1
+    ```
+
+    You'll see output like:
+
+    ```
+    Starting yugabyted...
+    ✓ System checks
+    ✓ Creating cluster
+    ✓ Starting master service
+    ✓ Starting tserver service
+    ✓ Waiting for services to be ready
+    
+    YugabyteDB started successfully!
+    
+    UI:   http://127.0.0.1:15433
+    YSQL: bin/ysqlsh -h 127.0.0.1
+    YCQL: bin/ycqlsh 127.0.0.1
+    ```
+
+    <Tip>
+    On macOS Monterey or later, if port 7000 is in use by AirPlay, use `-p 7001:7000` to forward to a different port.
+    </Tip>
+  </Tab>
+
+  <Tab title="Docker">
+    ```bash
+    docker run -d --name yugabyte \
+      -p 7000:7000 \
+      -p 9000:9000 \
+      -p 15433:15433 \
+      -p 5433:5433 \
+      -p 9042:9042 \
+      yugabytedb/yugabyte:2025.2.0.0-b2 \
+      bin/yugabyted start --background=false
+    ```
+
+    Check the container status:
+
+    ```bash
+    docker ps
+    ```
+
+    Verify the cluster is running:
+
+    ```bash
+    docker exec -it yugabyte yugabyted status
+    ```
+  </Tab>
+</Tabs>
+
+<Note>
+The `yugabyted` utility is a single command to create and manage local clusters. It automatically starts both YB-Master (metadata manager) and YB-TServer (data server) processes.
+</Note>
+
+## Step 4: Verify the cluster
+
+Check that your cluster is running:
+
+<Tabs>
+  <Tab title="Linux / macOS">
+    ```bash
+    ./bin/yugabyted status
+    ```
+
+    Expected output:
+
+    ```
+    +----------------------------------------------------------------------------------------------------------+
+    |                                                yugabyted                                                 |
+    +----------------------------------------------------------------------------------------------------------+
+    | Status              : Running                                                                            |
+    | Replication Factor  : 1                                                                                  |
+    | YugabyteDB UI       : http://127.0.0.1:15433                                                            |
+    | JDBC                : jdbc:postgresql://127.0.0.1:5433/yugabyte?user=yugabyte&password=yugabyte        |
+    | YSQL                : bin/ysqlsh -h 127.0.0.1 -U yugabyte -d yugabyte                                   |
+    | YCQL                : bin/ycqlsh 127.0.0.1 9042 -u cassandra                                            |
+    | Data Dir            : /home/user/var/data                                                               |
+    | Log Dir             : /home/user/var/logs                                                               |
+    | Universe UUID       : 550e8400-e29b-41d4-a716-446655440000                                              |
+    +----------------------------------------------------------------------------------------------------------+
+    ```
+  </Tab>
+
+  <Tab title="Docker">
+    ```bash
+    docker exec -it yugabyte yugabyted status
+    ```
+  </Tab>
+</Tabs>
+
+## Step 5: Connect to the database
+
+Connect using the YSQL shell (PostgreSQL-compatible interface):
+
+<Tabs>
+  <Tab title="Linux / macOS">
+    ```bash
+    ./bin/ysqlsh -h 127.0.0.1
+    ```
+  </Tab>
+
+  <Tab title="Docker">
+    ```bash
+    docker exec -it yugabyte bash -c '/home/yugabyte/bin/ysqlsh --echo-queries --host $(hostname)'
+    ```
+  </Tab>
+</Tabs>
+
+You should see the YSQL prompt:
+
+```
+ysqlsh (15.2-YB-2025.2.0.0-b0)
+Type "help" for help.
+
+yugabyte=#
+```
+
+## Step 6: Run your first queries
+
+Let's create a simple table and insert some data:
+
+<Steps>
+  <Step title="Create a table">
+    ```sql
+    CREATE TABLE users (
+      id SERIAL PRIMARY KEY,
+      name VARCHAR(100),
+      email VARCHAR(100) UNIQUE,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+    ```
+  </Step>
+
+  <Step title="Insert data">
+    ```sql
+    INSERT INTO users (name, email) VALUES
+      ('Alice Johnson', 'alice@example.com'),
+      ('Bob Smith', 'bob@example.com'),
+      ('Carol White', 'carol@example.com');
+    ```
+  </Step>
+
+  <Step title="Query the data">
+    ```sql
+    SELECT * FROM users;
+    ```
+
+    Expected output:
+
+    ```
+     id |     name      |       email        |         created_at
+    ----+---------------+--------------------+----------------------------
+      1 | Alice Johnson | alice@example.com  | 2026-03-04 10:30:15.123456
+      2 | Bob Smith     | bob@example.com    | 2026-03-04 10:30:15.123456
+      3 | Carol White   | carol@example.com  | 2026-03-04 10:30:15.123456
+    (3 rows)
+    ```
+  </Step>
+
+  <Step title="Try a transaction">
+    ```sql
+    BEGIN;
+      UPDATE users SET name = 'Alice Smith' WHERE id = 1;
+      UPDATE users SET email = 'alice.smith@example.com' WHERE id = 1;
+    COMMIT;
+    
+    SELECT * FROM users WHERE id = 1;
+    ```
+
+    This demonstrates YugabyteDB's ACID transaction support.
+  </Step>
+</Steps>
+
+## Step 7: Access the web UI
+
+YugabyteDB includes a built-in web interface for monitoring and administration:
+
+<Steps>
+  <Step title="Open the UI">
+    Navigate to [http://127.0.0.1:15433](http://127.0.0.1:15433) in your browser.
+  </Step>
+
+  <Step title="Explore the dashboard">
+    The UI provides:
+    - Cluster overview and health status
+    - Performance metrics and charts
+    - Node information and tablet distribution
+    - Query statistics
+    - Database tables and indexes
+  </Step>
+</Steps>
+
+<Note>
+The web UI runs on port 15433 by default. No authentication is required for local development clusters.
+</Note>
+
+## What's next?
+
+Now that you have YugabyteDB running, explore more:
+
+<CardGroup cols={2}>
+  <Card title="Build an application" icon="code" href="https://docs.yugabyte.com/stable/develop/">
+    Connect from Java, Python, Go, Node.js, or other languages
+  </Card>
+
+  <Card title="Core features" icon="sparkles" href="./core-features">
+    Learn about sharding, replication, and distributed transactions
+  </Card>
+
+  <Card title="Sample data" icon="database" href="https://docs.yugabyte.com/stable/sample-data/">
+    Load sample datasets to explore YugabyteDB features
+  </Card>
+
+  <Card title="Production deployment" icon="server" href="https://docs.yugabyte.com/stable/deploy/">
+    Deploy a multi-node cluster for production use
+  </Card>
+</CardGroup>
+
+## Common commands
+
+Here are some useful commands for managing your cluster:
+
+<CodeGroup>
+```bash Start cluster
+./bin/yugabyted start --advertise_address=127.0.0.1
+```
+
+```bash Stop cluster
+./bin/yugabyted stop
+```
+
+```bash Check status
+./bin/yugabyted status
+```
+
+```bash Destroy cluster
+./bin/yugabyted destroy
+```
+
+```bash Connect to YSQL
+./bin/ysqlsh -h 127.0.0.1
+```
+
+```bash Connect to YCQL
+./bin/ycqlsh 127.0.0.1
+```
+</CodeGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Port already in use">
+    If you see "address already in use" errors:
+
+    1. Check what's using the port: `lsof -i :5433`
+    2. Stop the conflicting service or use a different port
+    3. On macOS Monterey, disable AirPlay or use port forwarding
+  </Accordion>
+
+  <Accordion title="Cannot connect to cluster">
+    If you can't connect:
+
+    1. Verify the cluster is running: `yugabyted status`
+    2. Check firewall settings
+    3. Ensure you're using the correct IP address (127.0.0.1 for local)
+    4. Review logs in `~/var/logs/` for errors
+  </Accordion>
+
+  <Accordion title="Performance issues">
+    For slow queries:
+
+    1. Ensure you have adequate RAM (4 GB minimum)
+    2. Use SSDs for better I/O performance
+    3. Check CPU usage isn't maxed out
+    4. Review query plans with `EXPLAIN ANALYZE`
+  </Accordion>
+
+  <Accordion title="Docker container won't start">
+    If Docker fails:
+
+    1. Ensure Docker has enough resources allocated
+    2. Check Docker logs: `docker logs yugabyte`
+    3. Try removing and recreating: `docker rm yugabyte`
+    4. Verify port conflicts with `docker ps`
+  </Accordion>
+</AccordionGroup>
+
+<Tip>
+For more troubleshooting help, check the [YugabyteDB documentation](https://docs.yugabyte.com/stable/troubleshoot/) or ask in the [community Slack](https://communityinviter.com/apps/yugabyte-db/register).
+</Tip>
+
+## Multi-node cluster (optional)
+
+Want to test with multiple nodes? Here's how to create a 3-node local cluster:
+
+<Steps>
+  <Step title="Start first node">
+    ```bash
+    ./bin/yugabyted start --advertise_address=127.0.0.1 \
+      --base_dir=/tmp/ybd1
+    ```
+  </Step>
+
+  <Step title="Start second node">
+    ```bash
+    ./bin/yugabyted start --advertise_address=127.0.0.2 \
+      --base_dir=/tmp/ybd2 \
+      --join=127.0.0.1
+    ```
+  </Step>
+
+  <Step title="Start third node">
+    ```bash
+    ./bin/yugabyted start --advertise_address=127.0.0.3 \
+      --base_dir=/tmp/ybd3 \
+      --join=127.0.0.1
+    ```
+  </Step>
+
+  <Step title="Configure replication">
+    ```bash
+    ./bin/yugabyted configure data_placement --fault_tolerance=zone \
+      --base_dir=/tmp/ybd1
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+Multi-node local clusters require loopback alias configuration. See the [deployment documentation](https://docs.yugabyte.com/stable/deploy/) for details.
+</Warning>

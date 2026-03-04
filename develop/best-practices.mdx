@@ -1,0 +1,587 @@
+---
+title: Development Best Practices
+description: Tips and techniques for building high-performance YugabyteDB applications
+icon: 'star'
+---
+
+Follow these best practices to build efficient, scalable, and resilient applications on YugabyteDB. These guidelines cover data modeling, connection management, query optimization, and distributed system considerations.
+
+## Connection Management
+
+### Use Connection Pooling
+
+Connection pooling is essential for production applications to reduce overhead and improve performance.
+
+<CodeGroup>
+```java HikariCP (Java)
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
+
+HikariConfig config = new HikariConfig();
+config.setJdbcUrl("jdbc:postgresql://localhost:5433/yugabyte");
+config.setUsername("yugabyte");
+config.setPassword("yugabyte");
+config.setMaximumPoolSize(10);
+config.setMinimumIdle(2);
+config.setConnectionTimeout(30000);
+config.setIdleTimeout(600000);
+config.setMaxLifetime(1800000);
+
+HikariDataSource dataSource = new HikariDataSource(config);
+```
+
+```python SQLAlchemy (Python)
+from sqlalchemy import create_engine
+
+engine = create_engine(
+    'postgresql://yugabyte:yugabyte@localhost:5433/yugabyte',
+    pool_size=10,
+    max_overflow=20,
+    pool_pre_ping=True,
+    pool_recycle=3600
+)
+```
+
+```javascript pg-pool (Node.js)
+const { Pool } = require('pg');
+
+const pool = new Pool({
+  host: 'localhost',
+  port: 5433,
+  database: 'yugabyte',
+  user: 'yugabyte',
+  password: 'yugabyte',
+  max: 20,                      // Maximum pool size
+  min: 5,                       // Minimum pool size
+  idleTimeoutMillis: 30000,     // Close idle clients after 30s
+  connectionTimeoutMillis: 2000 // Timeout after 2s
+});
+```
+
+```go pgxpool (Go)
+import (
+    "context"
+    "github.com/jackc/pgx/v5/pgxpool"
+)
+
+config, _ := pgxpool.ParseConfig(
+    "postgres://yugabyte:yugabyte@localhost:5433/yugabyte"
+)
+config.MaxConns = 10
+config.MinConns = 2
+config.MaxConnLifetime = 1 * time.Hour
+config.MaxConnIdleTime = 30 * time.Minute
+
+pool, err := pgxpool.NewWithConfig(context.Background(), config)
+```
+</CodeGroup>
+
+**Pool Configuration Guidelines:**
+- Set `maxPoolSize` based on expected concurrent operations
+- Configure `connectionTimeout` to fail fast on connection issues
+- Use `maxLifetime` to recycle connections periodically
+- Enable `pool_pre_ping` (Python) to validate connections before use
+
+### Use Smart Drivers for Load Balancing
+
+YugabyteDB Smart Drivers provide cluster-aware load balancing:
+
+```java
+import com.yugabyte.ysql.YBClusterAwareDataSource;
+
+YBClusterAwareDataSource ds = new YBClusterAwareDataSource();
+ds.setUrl("jdbc:postgresql://node1:5433,node2:5433,node3:5433/yugabyte");
+ds.setUser("yugabyte");
+ds.setPassword("yugabyte");
+
+// Enable topology awareness
+ds.setTopologyAwareLoadBalance(true);
+ds.setTopologyKeys("aws.us-west-2.us-west-2a");
+```
+
+**Benefits:**
+- Automatic distribution of connections across nodes
+- Topology-aware routing to reduce latency
+- Automatic failover on node failures
+- Connection balancing during scale-out
+
+### Handle Connection Failures
+
+Implement retry logic for transient failures:
+
+<CodeGroup>
+```python Python Retry Logic
+import psycopg2
+import time
+from psycopg2 import OperationalError
+
+def execute_with_retry(query, max_retries=3, delay=1):
+    for attempt in range(max_retries):
+        try:
+            conn = psycopg2.connect(
+                host="localhost",
+                port=5433,
+                database="yugabyte",
+                user="yugabyte",
+                password="yugabyte"
+            )
+            cursor = conn.cursor()
+            cursor.execute(query)
+            conn.commit()
+            return cursor.fetchall()
+        except OperationalError as e:
+            if attempt < max_retries - 1:
+                time.sleep(delay * (2 ** attempt))  # Exponential backoff
+                continue
+            raise
+        finally:
+            if conn:
+                conn.close()
+```
+
+```javascript Node.js Retry Logic
+const { Client } = require('pg');
+
+async function executeWithRetry(query, maxRetries = 3) {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const client = new Client({
+        host: 'localhost',
+        port: 5433,
+        database: 'yugabyte',
+        connectionTimeoutMillis: 5000,
+      });
+      
+      await client.connect();
+      const result = await client.query(query);
+      await client.end();
+      return result;
+    } catch (error) {
+      if (attempt < maxRetries - 1 && isRetryableError(error)) {
+        await new Promise(resolve => 
+          setTimeout(resolve, Math.pow(2, attempt) * 1000)
+        );
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+
+function isRetryableError(error) {
+  return error.code === 'ECONNREFUSED' || 
+         error.code === 'ETIMEDOUT';
+}
+```
+</CodeGroup>
+
+## Data Modeling
+
+### Choose Primary Keys Wisely
+
+Primary key design impacts data distribution and query performance.
+
+<AccordionGroup>
+  <Accordion title="Use HASH for Sequential IDs">
+    For auto-incrementing IDs, use HASH partitioning to distribute data evenly:
+    
+    ```sql
+    -- Without HASH: Data concentrates on one tablet
+    CREATE TABLE orders (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER,
+        total DECIMAL(10, 2)
+    );
+    
+    -- With HASH: Data distributed across tablets
+    CREATE TABLE orders (
+        id SERIAL,
+        user_id INTEGER,
+        total DECIMAL(10, 2),
+        PRIMARY KEY (id HASH)
+    ) SPLIT INTO 16 TABLETS;
+    ```
+  </Accordion>
+
+  <Accordion title="Composite Keys for Time-Series Data">
+    Use composite keys for efficient time-range queries:
+    
+    ```sql
+    CREATE TABLE sensor_data (
+        sensor_id INTEGER,
+        timestamp TIMESTAMP,
+        temperature DOUBLE PRECISION,
+        humidity DOUBLE PRECISION,
+        PRIMARY KEY ((sensor_id) HASH, timestamp ASC)
+    ) SPLIT INTO 16 TABLETS;
+    
+    -- Efficient range query
+    SELECT * FROM sensor_data 
+    WHERE sensor_id = 101 
+      AND timestamp BETWEEN '2024-01-01' AND '2024-01-31';
+    ```
+  </Accordion>
+
+  <Accordion title="Natural Keys for Even Distribution">
+    Use naturally distributed keys when available:
+    
+    ```sql
+    -- UUID provides natural distribution
+    CREATE TABLE users (
+        user_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        username TEXT,
+        email TEXT
+    );
+    
+    -- Email as primary key (if unique and evenly distributed)
+    CREATE TABLE user_profiles (
+        email TEXT PRIMARY KEY,
+        name TEXT,
+        preferences JSONB
+    );
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### Leverage Indexes Effectively
+
+<Tabs>
+  <Tab title="Covering Indexes">
+    Include frequently queried columns in the index to avoid table lookups:
+    
+    ```sql
+    -- Regular index requires table lookup
+    CREATE INDEX idx_users_email ON users(email);
+    
+    -- Covering index includes needed columns
+    CREATE INDEX idx_users_email_covering ON users(email) 
+    INCLUDE (username, created_at);
+    
+    -- This query uses index-only scan
+    SELECT email, username, created_at 
+    FROM users 
+    WHERE email = 'john@example.com';
+    ```
+  </Tab>
+  
+  <Tab title="Partial Indexes">
+    Index only relevant rows to save space and improve write performance:
+    
+    ```sql
+    -- Index only active users
+    CREATE INDEX idx_active_users 
+    ON users(username) 
+    WHERE status = 'active';
+    
+    -- Index only recent orders
+    CREATE INDEX idx_recent_orders 
+    ON orders(created_at) 
+    WHERE created_at > NOW() - INTERVAL '90 days';
+    ```
+  </Tab>
+  
+  <Tab title="Expression Indexes">
+    Index computed values for complex queries:
+    
+    ```sql
+    -- Index for case-insensitive search
+    CREATE INDEX idx_users_lower_email 
+    ON users(LOWER(email));
+    
+    SELECT * FROM users WHERE LOWER(email) = 'john@example.com';
+    
+    -- Index for JSON field
+    CREATE INDEX idx_product_category 
+    ON products((attributes->>'category'));
+    ```
+  </Tab>
+</Tabs>
+
+### Use Colocation for Small Tables
+
+Colocate small reference tables for better performance:
+
+```sql
+-- Create colocated database
+CREATE DATABASE myapp WITH COLOCATION = true;
+
+-- Small tables are automatically colocated
+CREATE TABLE countries (
+    country_code CHAR(2) PRIMARY KEY,
+    country_name TEXT
+);
+
+CREATE TABLE currencies (
+    currency_code CHAR(3) PRIMARY KEY,
+    currency_name TEXT
+);
+
+-- Large tables can opt out
+CREATE TABLE users (
+    user_id UUID PRIMARY KEY,
+    username TEXT
+) WITH (COLOCATION = false);
+```
+
+## Query Optimization
+
+### Use Prepared Statements
+
+Prepared statements improve performance and prevent SQL injection:
+
+<CodeGroup>
+```java Java
+String sql = "SELECT * FROM users WHERE email = ?";
+PreparedStatement pstmt = conn.prepareStatement(sql);
+pstmt.setString(1, email);
+ResultSet rs = pstmt.executeQuery();
+```
+
+```python Python
+cursor.execute(
+    "SELECT * FROM users WHERE email = %s",
+    (email,)
+)
+```
+
+```javascript Node.js
+const result = await client.query(
+  'SELECT * FROM users WHERE email = $1',
+  [email]
+);
+```
+</CodeGroup>
+
+### Optimize Batch Operations
+
+Batch multiple operations to reduce round-trips:
+
+<CodeGroup>
+```sql Batch Insert
+-- Instead of multiple inserts
+INSERT INTO users (username, email) VALUES ('user1', 'user1@example.com');
+INSERT INTO users (username, email) VALUES ('user2', 'user2@example.com');
+
+-- Use single batch insert
+INSERT INTO users (username, email) VALUES
+    ('user1', 'user1@example.com'),
+    ('user2', 'user2@example.com'),
+    ('user3', 'user3@example.com');
+```
+
+```python Python Batch
+# Use executemany for batch inserts
+data = [
+    ('user1', 'user1@example.com'),
+    ('user2', 'user2@example.com'),
+    ('user3', 'user3@example.com')
+]
+
+cursor.executemany(
+    'INSERT INTO users (username, email) VALUES (%s, %s)',
+    data
+)
+```
+</CodeGroup>
+
+### Use RETURNING Clause
+
+Combine insert/update with select to reduce round-trips:
+
+```sql
+-- Single round-trip instead of two
+INSERT INTO users (username, email) 
+VALUES ('john_doe', 'john@example.com')
+RETURNING id, created_at;
+
+-- Update and return in one operation
+UPDATE accounts 
+SET balance = balance - 100 
+WHERE account_id = 123
+RETURNING balance;
+```
+
+## Transaction Best Practices
+
+### Keep Transactions Short
+
+```sql
+-- Bad: Long-running transaction
+BEGIN;
+  SELECT * FROM large_table;  -- Expensive operation
+  -- ... complex processing ...
+  UPDATE accounts SET balance = balance - 100 WHERE id = 1;
+COMMIT;
+
+-- Good: Short transaction
+-- Do expensive operations outside transaction
+SELECT * FROM large_table;
+-- ... process data ...
+
+BEGIN;
+  UPDATE accounts SET balance = balance - 100 WHERE id = 1;
+COMMIT;
+```
+
+### Use Appropriate Isolation Levels
+
+```sql
+-- Default: READ COMMITTED (best for most cases)
+BEGIN TRANSACTION ISOLATION LEVEL READ COMMITTED;
+
+-- For stronger consistency
+BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+
+-- For strongest consistency (use sparingly)
+BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+```
+
+### Handle Serialization Errors
+
+```python
+import psycopg2
+from psycopg2 import extensions
+
+def execute_transaction(func, max_retries=3):
+    for attempt in range(max_retries):
+        try:
+            conn = get_connection()
+            conn.set_isolation_level(
+                extensions.ISOLATION_LEVEL_SERIALIZABLE
+            )
+            result = func(conn)
+            conn.commit()
+            return result
+        except psycopg2.extensions.TransactionRollbackError:
+            if attempt < max_retries - 1:
+                continue
+            raise
+        finally:
+            conn.close()
+```
+
+## Performance Monitoring
+
+### Use EXPLAIN to Analyze Queries
+
+```sql
+-- Analyze query execution plan
+EXPLAIN (ANALYZE, COSTS, VERBOSE) 
+SELECT u.username, COUNT(o.id) 
+FROM users u
+LEFT JOIN orders o ON u.id = o.user_id
+GROUP BY u.username;
+
+-- Check if index is being used
+EXPLAIN SELECT * FROM users WHERE email = 'john@example.com';
+```
+
+### Monitor Slow Queries
+
+Enable slow query logging:
+
+```sql
+-- Set log threshold (in milliseconds)
+SET log_min_duration_statement = 1000;
+
+-- Log all statements
+SET log_statement = 'all';
+```
+
+## Multi-Region Best Practices
+
+### Use Tablespaces for Geo-Partitioning
+
+```sql
+-- Create tablespace for specific region
+CREATE TABLESPACE us_west 
+WITH (replica_placement='{"num_replicas": 3, "placement_blocks": 
+  [{"cloud": "aws", "region": "us-west-2", "zone": "us-west-2a", "min_num_replicas": 1}]
+}');
+
+-- Partition table by geography
+CREATE TABLE users (
+    user_id UUID,
+    region TEXT,
+    username TEXT,
+    PRIMARY KEY (user_id, region)
+) PARTITION BY LIST (region);
+
+CREATE TABLE users_us_west PARTITION OF users
+    FOR VALUES IN ('us-west') TABLESPACE us_west;
+```
+
+### Leverage Follower Reads
+
+Reduce latency for read-heavy workloads:
+
+```sql
+-- Enable follower reads for current session
+SET yb_read_from_followers = true;
+
+-- Set staleness tolerance (in milliseconds)
+SET yb_follower_read_staleness_ms = 10000;  -- 10 seconds
+
+-- Query will use nearest replica
+SELECT * FROM users WHERE user_id = 'uuid';
+```
+
+## Security Best Practices
+
+### Use SSL/TLS Connections
+
+```sql
+-- Connection with SSL
+postgresql://user:password@host:5433/database?sslmode=verify-full&sslrootcert=/path/to/root.crt
+```
+
+### Implement Row-Level Security
+
+```sql
+-- Enable row-level security
+ALTER TABLE documents ENABLE ROW LEVEL SECURITY;
+
+-- Create policy
+CREATE POLICY user_documents ON documents
+    FOR ALL
+    TO app_user
+    USING (user_id = current_setting('app.user_id')::INTEGER);
+
+-- Set user context
+SET app.user_id = 123;
+
+-- User only sees their documents
+SELECT * FROM documents;  -- Filtered by policy
+```
+
+## Summary Checklist
+
+<Check>Use connection pooling with appropriate sizing</Check>
+<Check>Implement retry logic with exponential backoff</Check>
+<Check>Design primary keys for even data distribution</Check>
+<Check>Create indexes for frequently queried columns</Check>
+<Check>Use covering indexes to avoid table lookups</Check>
+<Check>Keep transactions short and focused</Check>
+<Check>Use prepared statements for security and performance</Check>
+<Check>Batch operations to reduce round-trips</Check>
+<Check>Monitor query performance with EXPLAIN</Check>
+<Check>Use Smart Drivers for automatic load balancing</Check>
+<Check>Enable follower reads for read-heavy workloads</Check>
+<Check>Implement proper error handling and retries</Check>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Data Modeling" icon="diagram-project" href="https://docs.yugabyte.com/stable/develop/data-modeling/">
+    Learn advanced data modeling techniques
+  </Card>
+  <Card title="Performance Tuning" icon="gauge-high" href="https://docs.yugabyte.com/stable/explore/observability/">
+    Monitor and optimize performance
+  </Card>
+  <Card title="Global Applications" icon="globe" href="https://docs.yugabyte.com/stable/develop/build-global-apps/">
+    Build multi-region applications
+  </Card>
+  <Card title="Smart Drivers" icon="brain" href="https://docs.yugabyte.com/stable/develop/drivers-orms/smart-drivers/">
+    Explore smart driver features
+  </Card>
+</CardGroup>

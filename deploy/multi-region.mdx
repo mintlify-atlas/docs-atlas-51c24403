@@ -1,0 +1,454 @@
+---
+title: Multi-Region Deployment
+description: Deploy YugabyteDB across multiple geographic regions for global applications
+---
+
+Deploy YugabyteDB across multiple geographic regions to build globally distributed applications with low latency and high availability.
+
+## Overview
+
+YugabyteDB supports two primary multi-region deployment configurations:
+
+1. **3+ Data Center (3DC) Deployment**: Single cluster stretched across 3+ regions with synchronous replication
+2. **xCluster Replication**: Independent clusters with asynchronous replication
+
+## 3DC Deployment (Synchronous Replication)
+
+A single YugabyteDB universe deployed across 3 or more data centers with synchronous replication using Raft consensus.
+
+### Architecture
+
+- **Data consistency**: Global strong consistency
+- **Replication**: Synchronous via Raft
+- **Failover**: Automatic
+- **Write latency**: Affected by WAN latency
+- **Use cases**: Applications requiring strong consistency across regions
+
+### Prerequisites
+
+- 3+ regions (or data centers)
+- Low-latency network between regions (less than 100ms RTT recommended)
+- RF ≥ 3 (typically RF=3 or RF=5)
+- Stable WAN connectivity
+
+### Deploy 3DC Cluster with yugabyted
+
+<Steps>
+
+<Step title="Start first node in Region 1">
+
+```bash
+# Node in us-east-1
+./bin/yugabyted start \
+  --advertise_address=10.1.1.11 \
+  --cloud_location=aws.us-east-1.us-east-1a \
+  --fault_tolerance=region
+```
+
+**Note**: Use `--fault_tolerance=region` for multi-region deployments.
+
+</Step>
+
+<Step title="Start first node in Region 2">
+
+```bash
+# Node in us-west-2
+./bin/yugabyted start \
+  --advertise_address=10.2.1.12 \
+  --join=10.1.1.11 \
+  --cloud_location=aws.us-west-2.us-west-2a \
+  --fault_tolerance=region
+```
+
+</Step>
+
+<Step title="Start first node in Region 3">
+
+```bash
+# Node in eu-west-1
+./bin/yugabyted start \
+  --advertise_address=10.3.1.13 \
+  --join=10.1.1.11 \
+  --cloud_location=aws.eu-west-1.eu-west-1a \
+  --fault_tolerance=region
+```
+
+</Step>
+
+<Step title="Add additional nodes in each region">
+
+For a 9-node cluster (3 nodes per region):
+
+```bash
+# Region 1 - additional nodes
+./bin/yugabyted start --advertise_address=10.1.2.14 \
+  --join=10.1.1.11 --cloud_location=aws.us-east-1.us-east-1b \
+  --fault_tolerance=region
+
+./bin/yugabyted start --advertise_address=10.1.3.15 \
+  --join=10.1.1.11 --cloud_location=aws.us-east-1.us-east-1c \
+  --fault_tolerance=region
+
+# Repeat for other regions...
+```
+
+</Step>
+
+<Step title="Configure placement policy">
+
+Set replica placement across regions:
+
+```bash
+./bin/yb-admin -master_addresses 10.1.1.11:7100,10.2.1.12:7100,10.3.1.13:7100 \
+  modify_placement_info \
+  aws.us-east-1.us-east-1a,aws.us-west-2.us-west-2a,aws.eu-west-1.eu-west-1a 3
+```
+
+</Step>
+
+</Steps>
+
+### Preferred Region Configuration
+
+Optimize read latency by setting a preferred region:
+
+```sql
+-- Set preferred region for a tablespace
+CREATE TABLESPACE us_east_ts WITH (
+  replica_placement='{"num_replicas": 3, "placement_blocks": [
+    {"cloud":"aws","region":"us-east-1","zone":"us-east-1a","min_num_replicas":1,"leader_preference":1},
+    {"cloud":"aws","region":"us-west-2","zone":"us-west-2a","min_num_replicas":1},
+    {"cloud":"aws","region":"eu-west-1","zone":"eu-west-1a","min_num_replicas":1}
+  ]}'
+);
+
+-- Create table in the tablespace
+CREATE TABLE users (id INT PRIMARY KEY, name TEXT) TABLESPACE us_east_ts;
+```
+
+### Geo-Partitioning
+
+Partition data by geography for lower latency:
+
+```sql
+-- Create partitioned table
+CREATE TABLE orders (
+  order_id INT,
+  user_id INT,
+  region TEXT,
+  order_date DATE,
+  PRIMARY KEY (region, order_id)
+) PARTITION BY LIST (region);
+
+-- Create partition for US in us-east tablespace
+CREATE TABLE orders_us PARTITION OF orders
+  FOR VALUES IN ('US') TABLESPACE us_east_ts;
+
+-- Create partition for EU in eu-west tablespace
+CREATE TABLE orders_eu PARTITION OF orders  
+  FOR VALUES IN ('EU') TABLESPACE eu_west_ts;
+
+-- Create partition for APAC in ap-south tablespace
+CREATE TABLE orders_apac PARTITION OF orders
+  FOR VALUES IN ('APAC') TABLESPACE ap_south_ts;
+```
+
+## xCluster Replication (Asynchronous)
+
+Two or more independent YugabyteDB universes connected via change data capture (CDC).
+
+### Architecture
+
+- **Data consistency**: Eventually consistent
+- **Replication**: Asynchronous
+- **Failover**: Manual (application-managed)
+- **Write latency**: No WAN impact
+- **Use cases**: Disaster recovery, active-active applications
+
+### Deployment Types
+
+#### Unidirectional Replication
+
+One-way replication from primary to standby:
+
+```
+Primary (us-east) ──────> Standby (us-west)
+```
+
+#### Bidirectional Replication  
+
+Two-way replication for active-active:
+
+```
+Cluster A (us-east) <────> Cluster B (eu-west)
+```
+
+### Set Up xCluster Replication
+
+<Steps>
+
+<Step title="Deploy two independent clusters">
+
+**Cluster 1 (us-east):**
+```bash
+./bin/yugabyted start --advertise_address=10.1.1.11
+./bin/yugabyted start --advertise_address=10.1.1.12 --join=10.1.1.11
+./bin/yugabyted start --advertise_address=10.1.1.13 --join=10.1.1.11
+```
+
+**Cluster 2 (eu-west):**
+```bash
+./bin/yugabyted start --advertise_address=10.2.1.11
+./bin/yugabyted start --advertise_address=10.2.1.12 --join=10.2.1.11  
+./bin/yugabyted start --advertise_address=10.2.1.13 --join=10.2.1.11
+```
+
+</Step>
+
+<Step title="Create identical schemas on both clusters">
+
+On both clusters:
+```sql
+CREATE DATABASE myapp;
+
+\c myapp
+
+CREATE TABLE users (
+  id SERIAL PRIMARY KEY,
+  name TEXT,
+  email TEXT
+);
+```
+
+</Step>
+
+<Step title="Set up replication from Cluster 1 to Cluster 2">
+
+```bash
+./bin/yb-admin -master_addresses 10.1.1.11:7100 \
+  setup_universe_replication \
+  cluster2_replication \
+  10.2.1.11:7100,10.2.1.12:7100,10.2.1.13:7100 \
+  myapp.users
+```
+
+</Step>
+
+<Step title="(Optional) Set up bidirectional replication">
+
+For active-active, replicate from Cluster 2 to Cluster 1:
+
+```bash
+./bin/yb-admin -master_addresses 10.2.1.11:7100 \
+  setup_universe_replication \
+  cluster1_replication \
+  10.1.1.11:7100,10.1.1.12:7100,10.1.1.13:7100 \
+  myapp.users
+```
+
+</Step>
+
+<Step title="Verify replication status">
+
+```bash
+./bin/yb-admin -master_addresses 10.1.1.11:7100 \
+  get_replication_status
+```
+
+</Step>
+
+</Steps>
+
+### Monitor Replication Lag
+
+```bash
+# Check replication lag
+./bin/yb-admin -master_addresses 10.1.1.11:7100 \
+  get_replication_lag
+```
+
+Acceptable lag depends on your use case:
+- **< 1 second**: Real-time applications
+- **< 5 seconds**: Most business applications
+- **< 60 seconds**: Analytics/reporting
+
+## Read Replicas
+
+Deploy read-only replicas in remote regions for low-latency reads.
+
+### Deploy Read Replica Cluster
+
+```bash
+./bin/yb-admin -master_addresses 10.1.1.11:7100 \
+  add_read_replica_placement_info \
+  aws.ap-south-1.ap-south-1a,aws.ap-south-1.ap-south-1b,aws.ap-south-1.ap-south-1c 3
+```
+
+### Configure Timeline-Consistent Reads
+
+```sql
+-- Set session to read from replicas
+SET yb_read_from_followers = true;
+SET yb_follower_read_staleness_ms = 30000;  -- 30 seconds
+
+SELECT * FROM users WHERE region = 'APAC';
+```
+
+## Multi-Cloud Deployment
+
+Deploy across multiple cloud providers for maximum resilience.
+
+```bash
+# AWS node
+./bin/yugabyted start \
+  --advertise_address=10.1.1.11 \
+  --cloud_location=aws.us-east-1.us-east-1a \
+  --fault_tolerance=cloud
+
+# GCP node
+./bin/yugabyted start \
+  --advertise_address=10.2.1.12 \
+  --join=10.1.1.11 \
+  --cloud_location=gcp.us-central1.us-central1-a \
+  --fault_tolerance=cloud
+
+# Azure node  
+./bin/yugabyted start \
+  --advertise_address=10.3.1.13 \
+  --join=10.1.1.11 \
+  --cloud_location=azure.eastus.eastus-1 \
+  --fault_tolerance=cloud
+```
+
+## Network Configuration
+
+### VPN/VPC Peering
+
+Set up secure network connectivity:
+
+**AWS VPC Peering:**
+```bash
+aws ec2 create-vpc-peering-connection \
+  --vpc-id vpc-11111111 \
+  --peer-vpc-id vpc-22222222 \
+  --peer-region us-west-2
+```
+
+**GCP VPC Peering:**
+```bash
+gcloud compute networks peerings create peer-gcp-to-aws \
+  --network=yugabyte-network \
+  --peer-network=aws-network
+```
+
+### Firewall Rules
+
+Open required ports between regions:
+
+```bash
+# Allow YB-Master RPC
+7100/tcp
+
+# Allow YB-TServer RPC  
+9100/tcp
+
+# Allow client connections
+5433/tcp (YSQL)
+9042/tcp (YCQL)
+```
+
+## Performance Optimization
+
+### Minimize Cross-Region Traffic
+
+- Use geo-partitioning to keep data local
+- Set preferred regions for leader placement
+- Use follower reads for read-heavy workloads
+
+### Optimize Network Latency
+
+- Choose regions with low inter-region latency
+- Use cloud provider backbone networks
+- Enable compression for WAN traffic:
+
+```bash
+./bin/yugabyted start \
+  --tserver_flags="stream_compression_algo=3"  # LZ4 compression
+```
+
+### Monitor WAN Metrics
+
+Key metrics:
+- Round-trip time (RTT) between regions
+- Packet loss rate
+- Bandwidth utilization
+- Replication lag
+
+## Disaster Recovery
+
+### Backup to Multiple Regions
+
+```bash
+# Backup to S3 in multiple regions
+./bin/yb-admin create_snapshot ysql.mydb
+
+# Copy backup to remote region
+aws s3 sync s3://backups-us-east/ s3://backups-eu-west/ \
+  --source-region us-east-1 \
+  --region eu-west-1
+```
+
+### Failover Procedures
+
+For 3DC deployment:
+1. Automatic failover if region becomes unavailable
+2. No manual intervention required
+3. Cluster remains available with RF-2 nodes
+
+For xCluster:
+1. Update application connection strings
+2. Point to standby cluster
+3. Verify data consistency
+4. Switch xCluster direction when primary recovers
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Choose the Right Deployment Model">
+    - **3DC**: Use for strong consistency requirements
+    - **xCluster**: Use for disaster recovery or when WAN latency is high
+    - **Read Replicas**: Use for read-heavy workloads in distant regions
+  </Accordion>
+  
+  <Accordion title="Network Planning">
+    - Test inter-region latency before deployment
+    - Use dedicated interconnects when possible
+    - Plan for network redundancy
+    - Monitor bandwidth usage
+  </Accordion>
+  
+  <Accordion title="Data Placement Strategy">
+    - Use geo-partitioning for multi-tenant applications
+    - Set leader preferences to minimize latency
+    - Consider data sovereignty requirements
+    - Balance load across regions
+  </Accordion>
+  
+  <Accordion title="Testing">
+    - Test failover scenarios regularly
+    - Measure application latency from all regions
+    - Validate replication lag under load
+    - Simulate network partitions
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Monitor Your Cluster" icon="chart-line" href="/operate/monitoring">
+    Set up monitoring for multi-region deployments
+  </Card>
+  <Card title="Backup & Restore" icon="database" href="/manage/backup-restore">
+    Configure cross-region backups
+  </Card>
+</CardGroup>

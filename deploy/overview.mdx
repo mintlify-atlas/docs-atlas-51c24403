@@ -1,0 +1,164 @@
+---
+title: Deployment Overview
+description: Learn about the different ways to deploy YugabyteDB across various environments
+---
+
+YugabyteDB offers flexible deployment options to meet your infrastructure requirements, from local development to production-ready cloud deployments. This guide covers the essential deployment methods available.
+
+## Deployment Options
+
+YugabyteDB can be deployed in multiple ways:
+
+- **Docker**: Quick single-node or multi-node deployments using containers
+- **Kubernetes**: Cloud-native deployments with auto-scaling and self-healing
+- **Manual Deployment**: Direct installation on VMs or bare metal servers
+- **Multi-Region**: Geo-distributed deployments for global applications
+- **Cloud Providers**: Automated deployments on AWS, GCP, and Azure
+
+## Architecture Components
+
+Every YugabyteDB deployment consists of two main processes:
+
+### YB-Master
+
+The YB-Master server manages cluster metadata and coordinates system operations:
+
+- Stores catalog information (tables, schemas, users)
+- Handles DDL operations
+- Manages tablet metadata and placement
+- Coordinates background operations
+
+**Default Ports:**
+- RPC: 7100
+- Admin UI: 7000
+
+### YB-TServer
+
+The YB-TServer (Tablet Server) handles data storage and query processing:
+
+- Serves client read/write requests
+- Stores actual data in tablets
+- Executes YSQL and YCQL queries
+- Manages data replication via Raft
+
+**Default Ports:**
+- RPC: 9100
+- Admin UI: 9000
+- YSQL: 5433
+- YCQL: 9042
+- YEDIS: 6379
+
+## Deployment Tools
+
+### yugabyted
+
+The `yugabyted` utility is the recommended way to deploy and manage YugabyteDB clusters. It simplifies cluster operations by managing both YB-Master and YB-TServer processes.
+
+```bash
+# Start a single-node cluster
+./bin/yugabyted start
+
+# Start a multi-zone cluster
+./bin/yugabyted start \
+  --advertise_address=<node_ip> \
+  --cloud_location=aws.us-east-1.us-east-1a \
+  --fault_tolerance=zone
+
+# Join additional nodes
+./bin/yugabyted start \
+  --join=<first_node_ip> \
+  --advertise_address=<node_ip> \
+  --cloud_location=aws.us-east-1.us-east-1b
+```
+
+### yb-docker-ctl
+
+For Docker-based local development, use the `yb-docker-ctl` script:
+
+```bash
+# Create a 3-node cluster
+./bin/yb-docker-ctl create --rf 3
+
+# Check cluster status
+./bin/yb-docker-ctl status
+
+# Destroy the cluster
+./bin/yb-docker-ctl destroy
+```
+
+## Replication and Fault Tolerance
+
+### Replication Factor (RF)
+
+The replication factor determines how many copies of your data are maintained:
+
+- **RF=1**: No fault tolerance, suitable for development only
+- **RF=3**: Tolerates 1 node failure (recommended for production)
+- **RF=5**: Tolerates 2 node failures (high availability scenarios)
+
+### Fault Tolerance Modes
+
+- **none**: Single-node deployment, no fault tolerance
+- **zone**: Survive availability zone failures (requires RF≥3)
+- **region**: Survive region failures (requires RF≥3 across regions)
+- **cloud**: Survive cloud provider failures (requires multi-cloud setup)
+
+## Security Considerations
+
+### TLS Encryption
+
+Enable secure communication between nodes:
+
+```bash
+# Start with TLS enabled
+./bin/yugabyted start --secure
+
+# Generate server certificates for additional nodes
+./bin/yugabyted cert generate_server_certs --hostnames=<ip1>,<ip2>
+```
+
+### Authentication
+
+YugabyteDB supports multiple authentication mechanisms:
+
+- YSQL: PostgreSQL-compatible authentication
+- YCQL: Role-based authentication
+- LDAP integration
+- Kerberos support
+
+## Resource Requirements
+
+### Minimum Requirements (Development)
+
+- CPU: 2 cores per node
+- RAM: 4 GB per node
+- Disk: 10 GB per node
+
+### Recommended Requirements (Production)
+
+- CPU: 8-16 cores per node
+- RAM: 32-64 GB per node
+- Disk: 1-4 TB SSD per node (IOPS: 3000+)
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Docker Deployment" icon="docker" href="/deploy/docker">
+    Deploy YugabyteDB using Docker containers
+  </Card>
+  <Card title="Kubernetes Deployment" icon="dharmachakra" href="/deploy/kubernetes">
+    Deploy on Kubernetes using Helm or manifests
+  </Card>
+  <Card title="Manual Deployment" icon="server" href="/deploy/manual-deployment">
+    Install and configure on VMs or bare metal
+  </Card>
+  <Card title="Cloud Providers" icon="cloud" href="/deploy/cloud-providers">
+    Deploy on AWS, GCP, or Azure
+  </Card>
+</CardGroup>
+
+## Additional Resources
+
+- [System Configuration](https://docs.yugabyte.com/stable/deploy/checklist/)
+- [Security Best Practices](https://docs.yugabyte.com/stable/secure/)
+- [Performance Tuning](https://docs.yugabyte.com/stable/best-practices-operations/)

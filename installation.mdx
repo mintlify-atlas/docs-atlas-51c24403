@@ -1,0 +1,669 @@
+---
+title: Installation guide
+description: Install YugabyteDB on Linux, macOS, Docker, or Kubernetes
+---
+
+YugabyteDB can be installed on various platforms including Linux, macOS, Docker, and Kubernetes. This guide covers all installation methods with detailed instructions for each platform.
+
+## Choose your platform
+
+Select the platform that best fits your needs:
+
+<CardGroup cols={2}>
+  <Card title="Linux" icon="linux">
+    Install on CentOS, Ubuntu, RHEL, or other Linux distributions
+  </Card>
+  
+  <Card title="macOS" icon="apple">
+    Install on macOS with Intel or Apple Silicon (M1/M2)
+  </Card>
+  
+  <Card title="Docker" icon="docker">
+    Run in containers for development and testing
+  </Card>
+  
+  <Card title="Kubernetes" icon="dharmachakra">
+    Deploy on Kubernetes for production workloads
+  </Card>
+</CardGroup>
+
+## Prerequisites by platform
+
+<Tabs>
+  <Tab title="Linux">
+    ### Operating system
+
+    YugabyteDB supports the following Linux distributions:
+
+    - **CentOS** 7 or later
+    - **Red Hat Enterprise Linux (RHEL)** 7 or later  
+    - **Ubuntu** 18.04, 20.04, 22.04
+    - **Amazon Linux** 2
+    - **Oracle Linux** 7 or later
+
+    ### System requirements
+
+    - **CPU**: 2 cores minimum (4 cores recommended)
+    - **RAM**: 4 GB minimum (8 GB recommended)
+    - **Disk**: 10 GB free space minimum
+    - **Architecture**: x86_64 or aarch64 (ARM)
+
+    ### Software dependencies
+
+    Install the required packages:
+
+    <CodeGroup>
+    ```bash CentOS/RHEL
+    sudo yum install -y python3 wget
+    ```
+
+    ```bash Ubuntu/Debian
+    sudo apt-get update
+    sudo apt-get install -y python3 wget
+    ```
+    </CodeGroup>
+
+    ### System configuration
+
+    Configure ulimits for optimal performance:
+
+    ```bash
+    # Add to /etc/security/limits.conf
+    *                -       core            unlimited
+    *                -       data            unlimited
+    *                -       fsize           unlimited
+    *                -       sigpending      119934
+    *                -       memlock         64
+    *                -       rss             unlimited
+    *                -       nofile          1048576
+    *                -       msgqueue        819200
+    *                -       stack           8192
+    *                -       cpu             unlimited
+    *                -       nproc           12000
+    *                -       locks           unlimited
+    ```
+
+    <Warning>
+    Proper ulimit configuration is critical. Without it, you may encounter file descriptor errors when creating many tablets.
+    </Warning>
+  </Tab>
+
+  <Tab title="macOS">
+    ### Operating system
+
+    - **macOS 10.13 (High Sierra)** or later
+    - **Apple Silicon** (M1, M2, M3) fully supported
+    - **Intel processors** fully supported
+
+    ### System requirements
+
+    - **CPU**: 2 cores minimum (4 cores recommended)
+    - **RAM**: 4 GB minimum (8 GB recommended)  
+    - **Disk**: 10 GB free space minimum
+
+    ### Software dependencies
+
+    Install Xcode command line tools:
+
+    ```bash
+    xcode-select --install
+    ```
+
+    Python 3 is typically pre-installed on macOS. Verify with:
+
+    ```bash
+    python3 --version
+    ```
+
+    <Note>
+    macOS Monterey (12.0) and later enable AirPlay by default on port 7000. You'll need to either disable AirPlay or configure YugabyteDB to use a different port.
+    </Note>
+  </Tab>
+
+  <Tab title="Docker">
+    ### Docker requirements
+
+    - **Docker Engine** 20.10 or later
+    - **Docker Desktop** (for Mac and Windows)
+    - **Docker Compose** (optional, for multi-node setups)
+
+    ### Resource allocation
+
+    Configure Docker with adequate resources:
+
+    - **Memory**: 4 GB minimum (8 GB recommended)
+    - **CPUs**: 2 cores minimum (4 cores recommended)
+    - **Disk**: 20 GB minimum
+
+    For Docker Desktop, adjust these in:
+    - **Mac**: Docker → Preferences → Resources
+    - **Windows**: Docker → Settings → Resources
+
+    <Warning>
+    Docker is recommended for development and testing only. For production deployments, use native installations or Kubernetes.
+    </Warning>
+  </Tab>
+
+  <Tab title="Kubernetes">
+    ### Kubernetes requirements
+
+    - **Kubernetes** 1.20 or later
+    - **kubectl** configured and connected to your cluster
+    - **Helm** 3.4 or later (recommended)
+
+    ### Resource requirements per node
+
+    - **CPU**: 2 cores minimum
+    - **Memory**: 4 GB minimum
+    - **Persistent storage**: 100 GB minimum
+    - **Storage class**: SSD-backed storage recommended
+
+    ### Supported Kubernetes platforms
+
+    - Google Kubernetes Engine (GKE)
+    - Amazon Elastic Kubernetes Service (EKS)
+    - Azure Kubernetes Service (AKS)
+    - Red Hat OpenShift
+    - Rancher
+    - VMware Tanzu
+    - Self-managed Kubernetes
+  </Tab>
+</Tabs>
+
+## Installation steps
+
+<Tabs>
+  <Tab title="Linux">
+    <Steps>
+      <Step title="Download YugabyteDB">
+        Download the appropriate package for your architecture:
+
+        **For x86_64 systems:**
+
+        ```bash
+        wget https://downloads.yugabyte.com/releases/2025.2.0.0/yugabyte-2025.2.0.0-b2-linux-x86_64.tar.gz
+        ```
+
+        **For ARM64/aarch64 systems:**
+
+        ```bash
+        wget https://downloads.yugabyte.com/releases/2025.2.0.0/yugabyte-2025.2.0.0-b2-el8-aarch64.tar.gz
+        ```
+      </Step>
+
+      <Step title="Verify the download">
+        Verify the checksum to ensure file integrity:
+
+        ```bash
+        # For x86_64
+        echo "$(curl -L https://downloads.yugabyte.com/releases/2025.2.0.0/yugabyte-2025.2.0.0-b2-linux-x86_64-tar.gz.sha) *yugabyte-2025.2.0.0-b2-linux-x86_64.tar.gz" | shasum --check
+
+        # For ARM64  
+        echo "$(curl -L https://downloads.yugabyte.com/releases/2025.2.0.0/yugabyte-2025.2.0.0-b2-el8-aarch64-tar.gz.sha) *yugabyte-2025.2.0.0-b2-el8-aarch64.tar.gz" | shasum --check
+        ```
+
+        You should see: `OK`
+      </Step>
+
+      <Step title="Extract the archive">
+        ```bash
+        tar xvfz yugabyte-2025.2.0.0-b2-linux-x86_64.tar.gz
+        cd yugabyte-2025.2.0.0/
+        ```
+      </Step>
+
+      <Step title="Run post-install script">
+        Configure YugabyteDB by running:
+
+        ```bash
+        ./bin/post_install.sh
+        ```
+
+        This script:
+        - Sets up the directory structure
+        - Configures necessary libraries
+        - Prepares the environment
+      </Step>
+
+      <Step title="Verify installation">
+        Check that YugabyteDB is installed correctly:
+
+        ```bash
+        ./bin/yugabyted version
+        ```
+
+        Expected output:
+
+        ```
+        YugabyteDB version: 2025.2.0.0-b2
+        Build type: release
+        ```
+      </Step>
+
+      <Step title="Add to PATH (optional)">
+        For easier access, add YugabyteDB to your PATH:
+
+        ```bash
+        echo 'export PATH=$PATH:/path/to/yugabyte-2025.2.0.0/bin' >> ~/.bashrc
+        source ~/.bashrc
+        ```
+
+        Replace `/path/to/` with your actual installation path.
+      </Step>
+    </Steps>
+  </Tab>
+
+  <Tab title="macOS">
+    <Steps>
+      <Step title="Download YugabyteDB">
+        Download the macOS package:
+
+        ```bash
+        wget https://downloads.yugabyte.com/releases/2025.2.0.0/yugabyte-2025.2.0.0-b2-darwin-x86_64.tar.gz
+        ```
+
+        <Note>
+        The x86_64 package works on both Intel and Apple Silicon Macs (via Rosetta 2).
+        </Note>
+      </Step>
+
+      <Step title="Extract the archive">
+        ```bash
+        tar xvfz yugabyte-2025.2.0.0-b2-darwin-x86_64.tar.gz
+        cd yugabyte-2025.2.0.0/
+        ```
+      </Step>
+
+      <Step title="Run post-install script">
+        ```bash
+        ./bin/post_install.sh
+        ```
+      </Step>
+
+      <Step title="Handle macOS Gatekeeper">
+        On first run, macOS may block unsigned binaries. Allow them:
+
+        ```bash
+        # Remove quarantine attribute
+        xattr -r -d com.apple.quarantine yugabyte-2025.2.0.0
+        ```
+
+        Alternatively, approve each binary in:
+        **System Preferences → Security & Privacy → General**
+      </Step>
+
+      <Step title="Verify installation">
+        ```bash
+        ./bin/yugabyted version
+        ```
+      </Step>
+
+      <Step title="Configure port for macOS Monterey+">
+        If you're on macOS 12 (Monterey) or later:
+
+        **Option 1: Disable AirPlay receiving**
+        - System Preferences → Sharing
+        - Uncheck "AirPlay Receiver"
+
+        **Option 2: Use alternate port**
+        ```bash
+        ./bin/yugabyted start --master_webserver_port=7001
+        ```
+      </Step>
+    </Steps>
+  </Tab>
+
+  <Tab title="Docker">
+    <Steps>
+      <Step title="Pull the Docker image">
+        ```bash
+        docker pull yugabytedb/yugabyte:2025.2.0.0-b2
+        ```
+
+        Verify the image:
+
+        ```bash
+        docker images | grep yugabyte
+        ```
+      </Step>
+
+      <Step title="Create a persistent volume (optional)">
+        For data persistence across container restarts:
+
+        ```bash
+        mkdir ~/yb_data
+        ```
+      </Step>
+
+      <Step title="Start the container">
+        **Basic (non-persistent):**
+
+        ```bash
+        docker run -d --name yugabyte \
+          -p 7000:7000 \
+          -p 9000:9000 \
+          -p 15433:15433 \
+          -p 5433:5433 \
+          -p 9042:9042 \
+          yugabytedb/yugabyte:2025.2.0.0-b2 \
+          bin/yugabyted start --background=false
+        ```
+
+        **With persistent volume:**
+
+        ```bash
+        docker run -d --name yugabyte \
+          --hostname yugabyte \
+          -p 7000:7000 \
+          -p 9000:9000 \
+          -p 15433:15433 \
+          -p 5433:5433 \
+          -p 9042:9042 \
+          -v ~/yb_data:/home/yugabyte/yb_data \
+          yugabytedb/yugabyte:2025.2.0.0-b2 \
+          bin/yugabyted start \
+          --base_dir=/home/yugabyte/yb_data \
+          --background=false
+        ```
+
+        <Tip>
+        Always use `--hostname` with persistent volumes to avoid startup errors if the container is recreated.
+        </Tip>
+      </Step>
+
+      <Step title="Verify the container">
+        Check that the container is running:
+
+        ```bash
+        docker ps
+        ```
+
+        Check cluster status:
+
+        ```bash
+        docker exec -it yugabyte yugabyted status
+        ```
+      </Step>
+
+      <Step title="Connect to the database">
+        ```bash
+        docker exec -it yugabyte bash -c '/home/yugabyte/bin/ysqlsh --host $(hostname)'
+        ```
+      </Step>
+    </Steps>
+
+    ### Docker Compose (multi-node)
+
+    For a 3-node cluster, create `docker-compose.yml`:
+
+    ```yaml
+    version: '3'
+    services:
+      yb-master-1:
+        image: yugabytedb/yugabyte:2025.2.0.0-b2
+        container_name: yb-master-1
+        command: bin/yb-master --master_addresses=yb-master-1:7100,yb-master-2:7100,yb-master-3:7100 --replication_factor=3
+        ports:
+          - "7000:7000"
+
+      yb-master-2:
+        image: yugabytedb/yugabyte:2025.2.0.0-b2
+        container_name: yb-master-2
+        command: bin/yb-master --master_addresses=yb-master-1:7100,yb-master-2:7100,yb-master-3:7100 --replication_factor=3
+
+      yb-master-3:
+        image: yugabytedb/yugabyte:2025.2.0.0-b2
+        container_name: yb-master-3
+        command: bin/yb-master --master_addresses=yb-master-1:7100,yb-master-2:7100,yb-master-3:7100 --replication_factor=3
+
+      yb-tserver-1:
+        image: yugabytedb/yugabyte:2025.2.0.0-b2
+        container_name: yb-tserver-1
+        command: bin/yb-tserver --tserver_master_addrs=yb-master-1:7100,yb-master-2:7100,yb-master-3:7100
+        ports:
+          - "9000:9000"
+          - "5433:5433"
+
+      yb-tserver-2:
+        image: yugabytedb/yugabyte:2025.2.0.0-b2
+        container_name: yb-tserver-2
+        command: bin/yb-tserver --tserver_master_addrs=yb-master-1:7100,yb-master-2:7100,yb-master-3:7100
+
+      yb-tserver-3:
+        image: yugabytedb/yugabyte:2025.2.0.0-b2
+        container_name: yb-tserver-3
+        command: bin/yb-tserver --tserver_master_addrs=yb-master-1:7100,yb-master-2:7100,yb-master-3:7100
+    ```
+
+    Start the cluster:
+
+    ```bash
+    docker-compose up -d
+    ```
+  </Tab>
+
+  <Tab title="Kubernetes">
+    <Steps>
+      <Step title="Add Helm repository">
+        ```bash
+        helm repo add yugabytedb https://charts.yugabyte.com
+        helm repo update
+        ```
+      </Step>
+
+      <Step title="Create namespace">
+        ```bash
+        kubectl create namespace yb-demo
+        ```
+      </Step>
+
+      <Step title="Install YugabyteDB">
+        **Basic installation:**
+
+        ```bash
+        helm install yb-demo yugabytedb/yugabyte \
+          --namespace yb-demo \
+          --wait
+        ```
+
+        **Production installation with custom values:**
+
+        ```bash
+        helm install yb-demo yugabytedb/yugabyte \
+          --namespace yb-demo \
+          --set resource.master.requests.cpu=2 \
+          --set resource.master.requests.memory=4Gi \
+          --set resource.tserver.requests.cpu=4 \
+          --set resource.tserver.requests.memory=8Gi \
+          --set storage.master.size=100Gi \
+          --set storage.tserver.size=500Gi \
+          --set replicaCount=3 \
+          --wait
+        ```
+      </Step>
+
+      <Step title="Verify installation">
+        Check pod status:
+
+        ```bash
+        kubectl get pods -n yb-demo
+        ```
+
+        Expected output:
+
+        ```
+        NAME           READY   STATUS    RESTARTS   AGE
+        yb-master-0    2/2     Running   0          3m
+        yb-master-1    2/2     Running   0          3m
+        yb-master-2    2/2     Running   0          3m
+        yb-tserver-0   2/2     Running   0          3m
+        yb-tserver-1   2/2     Running   0          3m
+        yb-tserver-2   2/2     Running   0          3m
+        ```
+      </Step>
+
+      <Step title="Connect to the database">
+        ```bash
+        kubectl exec -n yb-demo -it yb-tserver-0 -- ysqlsh -h yb-tserver-0.yb-tservers.yb-demo
+        ```
+      </Step>
+
+      <Step title="Access the UI">
+        Port-forward the master UI:
+
+        ```bash
+        kubectl port-forward -n yb-demo svc/yb-master-ui 7000:7000
+        ```
+
+        Open [http://localhost:7000](http://localhost:7000) in your browser.
+      </Step>
+    </Steps>
+  </Tab>
+</Tabs>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Quick start" icon="rocket" href="./quick-start">
+    Start a cluster and run your first queries
+  </Card>
+  
+  <Card title="Core features" icon="sparkles" href="./core-features">
+    Explore YugabyteDB's distributed capabilities
+  </Card>
+  
+  <Card title="Production deployment" icon="server" href="https://docs.yugabyte.com/stable/deploy/">
+    Deploy multi-node clusters for production
+  </Card>
+  
+  <Card title="Build an app" icon="code" href="https://docs.yugabyte.com/stable/develop/">
+    Connect from your favorite programming language
+  </Card>
+</CardGroup>
+
+## Common issues
+
+<AccordionGroup>
+  <Accordion title="Installation fails on Linux">
+    **Missing dependencies:**
+    ```bash
+    # Install required packages
+    sudo yum install -y python3 wget  # CentOS/RHEL
+    sudo apt-get install -y python3 wget  # Ubuntu
+    ```
+
+    **Permission denied:**
+    ```bash
+    chmod +x bin/*
+    ```
+
+    **Insufficient ulimits:**
+    ```bash
+    ulimit -n 1048576
+    ulimit -u 12000
+    ```
+  </Accordion>
+
+  <Accordion title="macOS Gatekeeper blocks binaries">
+    Remove quarantine attribute:
+
+    ```bash
+    xattr -r -d com.apple.quarantine /path/to/yugabyte-*
+    ```
+
+    Or approve each binary in System Preferences → Security & Privacy.
+  </Accordion>
+
+  <Accordion title="Docker container won't start">
+    **Check resources:**
+    - Ensure Docker has at least 4 GB RAM
+    - Verify CPU allocation (2+ cores)
+
+    **Port conflicts:**
+    ```bash
+    # Find what's using the port
+    lsof -i :5433
+    
+    # Stop conflicting services or use different ports
+    docker run -p 5434:5433 ...
+    ```
+
+    **Check logs:**
+    ```bash
+    docker logs yugabyte
+    ```
+  </Accordion>
+
+  <Accordion title="Kubernetes pods not starting">
+    **Check storage:**
+    ```bash
+    kubectl get pvc -n yb-demo
+    ```
+
+    Ensure your cluster has a default storage class or specify one:
+    ```bash
+    --set storageClass=fast-ssd
+    ```
+
+    **Check resources:**
+    ```bash
+    kubectl describe pod yb-master-0 -n yb-demo
+    ```
+
+    Nodes must have enough CPU and memory.
+  </Accordion>
+</AccordionGroup>
+
+## Upgrading YugabyteDB
+
+To upgrade to a newer version:
+
+<Tabs>
+  <Tab title="Linux / macOS">
+    ```bash
+    # Stop the current cluster
+    ./bin/yugabyted stop
+    
+    # Download and extract new version
+    wget https://downloads.yugabyte.com/releases/<new-version>/...
+    tar xvfz yugabyte-<new-version>.tar.gz
+    
+    # Run post-install
+    cd yugabyte-<new-version>/
+    ./bin/post_install.sh
+    
+    # Start with existing data
+    ./bin/yugabyted start --advertise_address=127.0.0.1
+    ```
+  </Tab>
+
+  <Tab title="Docker">
+    ```bash
+    # Pull new image
+    docker pull yugabytedb/yugabyte:<new-version>
+    
+    # Stop and remove old container
+    docker stop yugabyte
+    docker rm yugabyte
+    
+    # Start with new image (use same volume for data persistence)
+    docker run -d --name yugabyte \
+      -v ~/yb_data:/home/yugabyte/yb_data \
+      yugabytedb/yugabyte:<new-version> ...
+    ```
+  </Tab>
+
+  <Tab title="Kubernetes">
+    ```bash
+    # Upgrade using Helm
+    helm upgrade yb-demo yugabytedb/yugabyte \
+      --namespace yb-demo \
+      --version <new-chart-version> \
+      --wait
+    ```
+  </Tab>
+</Tabs>
+
+<Warning>
+Always back up your data before upgrading. For production clusters, follow the [rolling upgrade procedure](https://docs.yugabyte.com/stable/manage/upgrade-deployment/).
+</Warning>

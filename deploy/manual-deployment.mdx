@@ -1,0 +1,482 @@
+---
+title: Manual Deployment
+description: Deploy YugabyteDB manually on VMs or bare metal servers using yugabyted
+---
+
+Deploy YugabyteDB manually on virtual machines or bare metal servers for maximum control and customization of your database infrastructure.
+
+## Prerequisites
+
+### System Requirements
+
+**Operating System:**
+- Ubuntu 18.04+, CentOS 7+, RHEL 7+, or Amazon Linux 2
+- AlmaLinux 8+ (recommended)
+
+**Hardware (per node):**
+- CPU: 4+ cores (8-16 cores recommended for production)
+- RAM: 8+ GB (32-64 GB recommended for production)
+- Disk: 100+ GB SSD with 3000+ IOPS
+- Network: 1+ Gbps
+
+**Software:**
+- Python 3.11+
+- OpenSSL
+- Network Time Protocol (NTP) configured
+
+### Download YugabyteDB
+
+```bash
+# Download the latest version
+wget https://downloads.yugabyte.com/releases/2.25.0.0/yugabyte-2.25.0.0-b180-linux-x86_64.tar.gz
+
+# Extract the archive
+tar xvfz yugabyte-2.25.0.0-b180-linux-x86_64.tar.gz
+
+cd yugabyte-2.25.0.0/
+
+# Run post-install script
+./bin/post_install.sh
+```
+
+## Deploy a Single-Node Cluster
+
+Ideal for development and testing.
+
+<Steps>
+
+<Step title="Start YugabyteDB">
+
+```bash
+./bin/yugabyted start
+```
+
+**Output:**
+```
+Starting yugabyted...
+✅ System checks
+✅ Creating cluster
+✅ Starting master
+✅ Starting tserver
+✅ Waiting for cluster to be ready
+
+YugabyteDB started successfully!
+
+UI: http://127.0.0.1:7000
+YSQL: postgresql://127.0.0.1:5433
+YCQL: 127.0.0.1:9042
+```
+
+</Step>
+
+<Step title="Check status">
+
+```bash
+./bin/yugabyted status
+```
+
+</Step>
+
+<Step title="Connect to the database">
+
+```bash
+# YSQL (PostgreSQL-compatible)
+./bin/ysqlsh
+
+# YCQL (Cassandra-compatible)
+./bin/ycqlsh
+```
+
+</Step>
+
+</Steps>
+
+## Deploy a Multi-Node Cluster
+
+Production-ready deployment across multiple servers.
+
+### Architecture Overview
+
+For a 3-node cluster with RF=3:
+- Each node runs both YB-Master and YB-TServer
+- Data is replicated across all 3 nodes
+- Cluster survives 1 node failure
+
+### Network Configuration
+
+Ensure the following ports are accessible between nodes:
+
+| Port  | Protocol | Service           | Purpose |
+|-------|----------|-------------------|----------|
+| 7100  | TCP      | YB-Master RPC     | Master-to-master communication |
+| 7000  | TCP      | YB-Master UI      | Admin interface |
+| 9100  | TCP      | YB-TServer RPC    | Server-to-server communication |
+| 9000  | TCP      | YB-TServer UI     | Admin interface |
+| 5433  | TCP      | YSQL              | PostgreSQL client connections |
+| 9042  | TCP      | YCQL              | Cassandra client connections |
+| 6379  | TCP      | YEDIS             | Redis client connections |
+
+### Single-Zone Deployment
+
+<Steps>
+
+<Step title="Start the first node (Node 1)">
+
+```bash
+# On node 1 (e.g., 192.168.1.11)
+./bin/yugabyted start \
+  --advertise_address=192.168.1.11 \
+  --cloud_location=aws.us-east-1.us-east-1a \
+  --fault_tolerance=zone
+```
+
+**Key Flags:**
+- `--advertise_address`: IP address for other nodes to connect
+- `--cloud_location`: Placement info (cloud.region.zone)
+- `--fault_tolerance`: Fault tolerance level (zone, region, cloud)
+
+</Step>
+
+<Step title="Start the second node (Node 2)">
+
+```bash
+# On node 2 (e.g., 192.168.1.12)
+./bin/yugabyted start \
+  --advertise_address=192.168.1.12 \
+  --join=192.168.1.11 \
+  --cloud_location=aws.us-east-1.us-east-1a \
+  --fault_tolerance=zone
+```
+
+**Key Flags:**
+- `--join`: IP address of an existing node to join
+
+</Step>
+
+<Step title="Start the third node (Node 3)">
+
+```bash
+# On node 3 (e.g., 192.168.1.13)  
+./bin/yugabyted start \
+  --advertise_address=192.168.1.13 \
+  --join=192.168.1.11 \
+  --cloud_location=aws.us-east-1.us-east-1a \
+  --fault_tolerance=zone
+```
+
+</Step>
+
+<Step title="Verify cluster status">
+
+On any node:
+
+```bash
+./bin/yugabyted status
+```
+
+Check the cluster configuration:
+
+```bash
+./bin/yb-admin -master_addresses 192.168.1.11:7100,192.168.1.12:7100,192.168.1.13:7100 \
+  list_all_masters
+```
+
+</Step>
+
+</Steps>
+
+### Multi-Zone Deployment
+
+Deploy across multiple availability zones for zone-level fault tolerance.
+
+<Steps>
+
+<Step title="Start node in Zone A">
+
+```bash
+# Node 1 in us-east-1a
+./bin/yugabyted start \
+  --advertise_address=192.168.1.11 \
+  --cloud_location=aws.us-east-1.us-east-1a \
+  --fault_tolerance=zone
+```
+
+</Step>
+
+<Step title="Start node in Zone B">
+
+```bash
+# Node 2 in us-east-1b
+./bin/yugabyted start \
+  --advertise_address=192.168.2.12 \
+  --join=192.168.1.11 \
+  --cloud_location=aws.us-east-1.us-east-1b \
+  --fault_tolerance=zone
+```
+
+</Step>
+
+<Step title="Start node in Zone C">
+
+```bash
+# Node 3 in us-east-1c
+./bin/yugabyted start \
+  --advertise_address=192.168.3.13 \
+  --join=192.168.1.11 \
+  --cloud_location=aws.us-east-1.us-east-1c \
+  --fault_tolerance=zone
+```
+
+</Step>
+
+</Steps>
+
+## Secure Deployment
+
+Enable TLS encryption and authentication.
+
+<Steps>
+
+<Step title="Start first node with security enabled">
+
+```bash
+./bin/yugabyted start \
+  --secure \
+  --advertise_address=192.168.1.11 \
+  --cloud_location=aws.us-east-1.us-east-1a \
+  --fault_tolerance=zone
+```
+
+This generates server certificates in `$HOME/var/certs/`.
+
+</Step>
+
+<Step title="Generate certificates for additional nodes">
+
+```bash
+./bin/yugabyted cert generate_server_certs \
+  --hostnames=192.168.1.12,192.168.1.13
+```
+
+Certificates are generated in `$HOME/var/generated_certs/`.
+
+</Step>
+
+<Step title="Copy certificates to other nodes">
+
+```bash
+# Copy to node 2
+scp -r $HOME/var/generated_certs/192.168.1.12/* \
+  user@192.168.1.12:$HOME/var/certs/
+
+# Copy to node 3
+scp -r $HOME/var/generated_certs/192.168.1.13/* \
+  user@192.168.1.13:$HOME/var/certs/
+```
+
+</Step>
+
+<Step title="Start additional nodes with security">
+
+```bash
+# Node 2
+./bin/yugabyted start \
+  --secure \
+  --advertise_address=192.168.1.12 \
+  --join=192.168.1.11 \
+  --cloud_location=aws.us-east-1.us-east-1b \
+  --fault_tolerance=zone
+
+# Node 3
+./bin/yugabyted start \
+  --secure \
+  --advertise_address=192.168.1.13 \
+  --join=192.168.1.11 \
+  --cloud_location=aws.us-east-1.us-east-1c \
+  --fault_tolerance=zone
+```
+
+</Step>
+
+</Steps>
+
+## Advanced Configuration
+
+### Enable Backup/Restore
+
+Install YB Controller for backup operations:
+
+```bash
+# Extract YBC from share directory
+cd yugabyte-2.25.0.0/
+mkdir ybc
+tar -xvf share/ybc-*.tar.gz -C ybc --strip-components=1
+
+# Start with backup daemon
+./bin/yugabyted start \
+  --backup_daemon=true \
+  --advertise_address=192.168.1.11
+```
+
+### Configure Memory Settings
+
+Customize memory allocation:
+
+```bash
+./bin/yugabyted start \
+  --advertise_address=192.168.1.11 \
+  --tserver_flags="memory_limit_hard_bytes=34359738368"
+```
+
+### Enable Connection Manager
+
+Use YSQL Connection Manager for connection pooling:
+
+```bash
+./bin/yugabyted start \
+  --advertise_address=192.168.1.11 \
+  --tserver_flags="enable_ysql_conn_mgr=true"
+```
+
+### Custom Data Directories
+
+Specify custom data locations:
+
+```bash
+./bin/yugabyted start \
+  --advertise_address=192.168.1.11 \
+  --base_dir=/data/yugabyte
+```
+
+### Increase Verbosity for Debugging
+
+```bash
+./bin/yugabyted start \
+  --advertise_address=192.168.1.11 \
+  --master_flags="v=2" \
+  --tserver_flags="v=2"
+```
+
+## Cluster Management
+
+### Check Cluster Status
+
+```bash
+./bin/yugabyted status
+```
+
+### Stop a Node
+
+```bash
+./bin/yugabyted stop
+```
+
+### Destroy a Node
+
+<Warning>
+This deletes all data on the node.
+</Warning>
+
+```bash
+./bin/yugabyted destroy
+```
+
+### Collect Logs
+
+```bash
+./bin/yugabyted collect_logs
+```
+
+Logs are archived to: `$HOME/var/logs/yugabyted_logs_<timestamp>.tar.gz`
+
+## System Configuration
+
+### Set System Limits
+
+Edit `/etc/security/limits.conf`:
+
+```bash
+yugabyte soft nofile 1048576
+yugabyte hard nofile 1048576
+yugabyte soft nproc 12000
+yugabyte hard nproc 12000
+yugabyte soft core unlimited
+yugabyte hard core unlimited
+```
+
+### Configure NTP
+
+```bash
+# Install chrony
+sudo yum install chrony -y
+
+# Start and enable
+sudo systemctl start chronyd
+sudo systemctl enable chronyd
+
+# Verify sync
+chronyc tracking
+```
+
+### Disable Transparent Huge Pages
+
+```bash
+echo never | sudo tee /sys/kernel/mm/transparent_hugepage/enabled
+echo never | sudo tee /sys/kernel/mm/transparent_hugepage/defrag
+```
+
+Make permanent in `/etc/rc.local`.
+
+## Monitoring
+
+Access admin UIs:
+
+- **YB-Master UI**: `http://<node-ip>:7000`
+- **YB-TServer UI**: `http://<node-ip>:9000`
+
+Key metrics to monitor:
+- CPU and memory usage
+- Disk I/O and space
+- Network throughput
+- RPC latency
+- Tablet distribution
+
+## Troubleshooting
+
+### View Logs
+
+```bash
+# Master logs
+tail -f $HOME/var/logs/yb-master.INFO
+
+# TServer logs
+tail -f $HOME/var/logs/yb-tserver.INFO
+```
+
+### Check Process Status
+
+```bash
+ps aux | grep yb-master
+ps aux | grep yb-tserver
+```
+
+### Test Connectivity
+
+```bash
+# Check master RPC port
+telnet <node-ip> 7100
+
+# Check tserver RPC port  
+telnet <node-ip> 9100
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Multi-Region Deployment" icon="earth-americas" href="/deploy/multi-region">
+    Deploy across geographic regions
+  </Card>
+  <Card title="Configure Security" icon="shield" href="/secure/overview">
+    Set up authentication and encryption
+  </Card>
+</CardGroup>

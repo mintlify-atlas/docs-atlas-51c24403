@@ -1,0 +1,589 @@
+---
+title: Cloud Provider Deployments
+description: Deploy YugabyteDB on AWS, GCP, and Azure using automated tools and best practices
+---
+
+Deploy YugabyteDB on major cloud providers using infrastructure-as-code tools and cloud-native services.
+
+## Supported Cloud Providers
+
+YugabyteDB supports deployment on:
+
+- **Amazon Web Services (AWS)** - EC2, EKS, CloudFormation, Terraform
+- **Google Cloud Platform (GCP)** - Compute Engine, GKE, Deployment Manager, Terraform
+- **Microsoft Azure** - Virtual Machines, AKS, ARM Templates, Terraform
+
+## Amazon Web Services (AWS)
+
+### Prerequisites
+
+- AWS account with appropriate permissions
+- AWS CLI installed and configured
+- VPC with private subnets in multiple AZs
+- Security groups configured
+
+### Deploy on EC2 with Terraform
+
+<Steps>
+
+<Step title="Install Terraform">
+
+```bash
+wget https://releases.hashicorp.com/terraform/1.6.0/terraform_1.6.0_linux_amd64.zip
+unzip terraform_1.6.0_linux_amd64.zip
+sudo mv terraform /usr/local/bin/
+```
+
+</Step>
+
+<Step title="Clone YugabyteDB Terraform module">
+
+```bash
+git clone https://github.com/yugabyte/terraform-aws-yugabyte.git
+cd terraform-aws-yugabyte
+```
+
+</Step>
+
+<Step title="Configure variables">
+
+Create `terraform.tfvars`:
+
+```hcl
+# AWS Configuration
+region_name = "us-east-1"
+availability_zones = ["us-east-1a", "us-east-1b", "us-east-1c"]
+
+# Cluster Configuration  
+cluster_name = "yugabyte-production"
+replication_factor = 3
+num_instances = 3
+
+# Instance Configuration
+instance_type = "c5.2xlarge"
+volume_size = 100
+volume_type = "gp3"
+iops = 3000
+
+# Network Configuration
+vpc_id = "vpc-xxxxxxxxx"
+subnet_ids = ["subnet-xxx", "subnet-yyy", "subnet-zzz"]
+
+# SSH Configuration
+ssh_keypair = "my-keypair"
+ssh_private_key_path = "~/.ssh/my-keypair.pem"
+
+# YugabyteDB Configuration
+yugabyte_version = "2.25.0.0"
+```
+
+</Step>
+
+<Step title="Deploy the cluster">
+
+```bash
+terraform init
+terraform plan
+terraform apply
+```
+
+</Step>
+
+<Step title="Get connection details">
+
+```bash
+terraform output
+```
+
+**Output:**
+```
+master_ui_url = "http://10.0.1.10:7000"
+tserver_ui_url = "http://10.0.1.10:9000"
+ysql_connection = "postgresql://yugabyte@10.0.1.10:5433"
+ycql_connection = "10.0.1.10:9042"
+```
+
+</Step>
+
+</Steps>
+
+### Deploy on EKS with Helm
+
+<Steps>
+
+<Step title="Create EKS cluster">
+
+```bash
+exsctl create cluster \
+  --name yugabyte-eks \
+  --region us-east-1 \
+  --nodegroup-name standard-workers \
+  --node-type c5.2xlarge \
+  --nodes 3 \
+  --nodes-min 3 \
+  --nodes-max 6 \
+  --managed
+```
+
+</Step>
+
+<Step title="Configure storage class">
+
+Create `ebs-storage-class.yaml`:
+
+```yaml
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: yb-storage
+provisioner: kubernetes.io/aws-ebs
+parameters:
+  type: gp3
+  iops: "3000"
+  throughput: "125"
+  encrypted: "true"
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+```
+
+```bash
+kubectl apply -f ebs-storage-class.yaml
+```
+
+</Step>
+
+<Step title="Deploy YugabyteDB">
+
+```bash
+helm repo add yugabytedb https://charts.yugabyte.com
+helm repo update
+
+helm install yb-demo yugabytedb/yugabyte \
+  --namespace yb-demo \
+  --create-namespace \
+  --set storage.master.storageClass=yb-storage \
+  --set storage.tserver.storageClass=yb-storage \
+  --set resource.tserver.requests.cpu=4 \
+  --set resource.tserver.requests.memory=16Gi
+```
+
+</Step>
+
+</Steps>
+
+### AWS CloudFormation
+
+Deploy using AWS CloudFormation templates:
+
+```bash
+aws cloudformation create-stack \
+  --stack-name yugabyte-cluster \
+  --template-url https://yugabyte-cloudformation.s3.amazonaws.com/yugabyte-cloudformation.yaml \
+  --parameters \
+    ParameterKey=InstanceType,ParameterValue=c5.2xlarge \
+    ParameterKey=ReplicationFactor,ParameterValue=3 \
+    ParameterKey=VpcId,ParameterValue=vpc-xxxxxxxxx
+```
+
+### Best Practices for AWS
+
+- **Instance Types**: Use compute-optimized instances (c5, c6i)
+- **Storage**: Use gp3 volumes with 3000+ IOPS
+- **Networking**: Deploy across 3+ Availability Zones
+- **Security**: Use VPC endpoints, enable encryption at rest
+- **Monitoring**: Enable CloudWatch metrics and logs
+
+## Google Cloud Platform (GCP)
+
+### Prerequisites
+
+- GCP project with billing enabled
+- gcloud CLI installed and configured
+- VPC with subnets in multiple zones
+- Firewall rules configured
+
+### Deploy on Compute Engine with Terraform
+
+<Steps>
+
+<Step title="Clone Terraform module">
+
+```bash
+git clone https://github.com/yugabyte/terraform-gcp-yugabyte.git
+cd terraform-gcp-yugabyte
+```
+
+</Step>
+
+<Step title="Configure variables">
+
+Create `terraform.tfvars`:
+
+```hcl
+# GCP Configuration
+project_id = "my-gcp-project"
+region = "us-central1"
+zones = ["us-central1-a", "us-central1-b", "us-central1-c"]
+
+# Cluster Configuration
+cluster_name = "yugabyte-prod"
+replication_factor = 3
+num_instances = 3
+
+# Instance Configuration  
+machine_type = "n2-highmem-8"
+boot_disk_size = 100
+boot_disk_type = "pd-ssd"
+
+# Network Configuration
+network = "yugabyte-network"
+subnetwork = "yugabyte-subnet"
+
+# YugabyteDB Configuration
+yugabyte_version = "2.25.0.0"
+```
+
+</Step>
+
+<Step title="Deploy the cluster">
+
+```bash
+terraform init
+terraform apply
+```
+
+</Step>
+
+</Steps>
+
+### Deploy on GKE with Helm
+
+<Steps>
+
+<Step title="Create GKE cluster">
+
+```bash
+gcloud container clusters create yugabyte-gke \
+  --region us-central1 \
+  --node-locations us-central1-a,us-central1-b,us-central1-c \
+  --machine-type n2-standard-8 \
+  --num-nodes 1 \
+  --disk-type pd-ssd \
+  --disk-size 100 \
+  --enable-stackdriver-kubernetes \
+  --enable-ip-alias \
+  --enable-autoscaling \
+  --min-nodes 3 \
+  --max-nodes 6
+```
+
+</Step>
+
+<Step title="Configure storage class">
+
+```yaml
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: yb-storage
+provisioner: kubernetes.io/gce-pd
+parameters:
+  type: pd-ssd
+  replication-type: regional-pd
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+```
+
+</Step>
+
+<Step title="Deploy YugabyteDB">
+
+```bash
+helm install yb-demo yugabytedb/yugabyte \
+  --namespace yb-demo \
+  --create-namespace \
+  --set storage.master.storageClass=yb-storage \
+  --set storage.tserver.storageClass=yb-storage
+```
+
+</Step>
+
+</Steps>
+
+### GCP Deployment Manager
+
+```bash
+gcloud deployment-manager deployments create yugabyte-deployment \
+  --config yugabyte-deployment.yaml
+```
+
+### Best Practices for GCP
+
+- **Instance Types**: Use n2-highmem or c2 series
+- **Storage**: Use pd-ssd with regional persistent disks
+- **Networking**: Use regional GKE clusters
+- **Security**: Use VPC Service Controls, enable encryption
+- **Monitoring**: Enable Cloud Monitoring and Logging
+
+## Microsoft Azure
+
+### Prerequisites
+
+- Azure subscription
+- Azure CLI installed and configured  
+- Virtual network with subnets
+- Network security groups configured
+
+### Deploy on Azure VMs with Terraform
+
+<Steps>
+
+<Step title="Clone Terraform module">
+
+```bash
+git clone https://github.com/yugabyte/terraform-azure-yugabyte.git
+cd terraform-azure-yugabyte
+```
+
+</Step>
+
+<Step title="Configure variables">
+
+Create `terraform.tfvars`:
+
+```hcl
+# Azure Configuration  
+subscription_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+resource_group = "yugabyte-rg"
+region = "eastus"
+availability_zones = ["1", "2", "3"]
+
+# Cluster Configuration
+cluster_name = "yugabyte-prod"
+replication_factor = 3
+num_instances = 3
+
+# Instance Configuration
+vm_size = "Standard_D8s_v3"
+disk_size = 100
+disk_type = "Premium_LRS"
+
+# Network Configuration
+vnet_name = "yugabyte-vnet"
+subnet_name = "yugabyte-subnet"
+```
+
+</Step>
+
+<Step title="Deploy the cluster">
+
+```bash
+terraform init  
+terraform apply
+```
+
+</Step>
+
+</Steps>
+
+### Deploy on AKS with Helm
+
+<Steps>
+
+<Step title="Create AKS cluster">
+
+```bash
+az aks create \
+  --resource-group yugabyte-rg \
+  --name yugabyte-aks \
+  --node-count 3 \
+  --node-vm-size Standard_D8s_v3 \
+  --zones 1 2 3 \
+  --enable-managed-identity \
+  --generate-ssh-keys
+```
+
+</Step>
+
+<Step title="Configure kubectl">
+
+```bash
+az aks get-credentials \
+  --resource-group yugabyte-rg \
+  --name yugabyte-aks
+```
+
+</Step>
+
+<Step title="Configure storage class">
+
+```yaml
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: yb-storage
+provisioner: kubernetes.io/azure-disk  
+parameters:
+  storageaccounttype: Premium_LRS
+  kind: Managed
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+```
+
+</Step>
+
+<Step title="Deploy YugabyteDB">
+
+```bash
+helm install yb-demo yugabytedb/yugabyte \
+  --namespace yb-demo \
+  --create-namespace \
+  --set storage.master.storageClass=yb-storage \
+  --set storage.tserver.storageClass=yb-storage
+```
+
+</Step>
+
+</Steps>
+
+### Azure ARM Templates
+
+```bash
+az deployment group create \
+  --resource-group yugabyte-rg \
+  --template-file yugabyte-template.json \
+  --parameters @yugabyte-parameters.json
+```
+
+### Best Practices for Azure
+
+- **VM Sizes**: Use Dsv3 or Esv3 series
+- **Storage**: Use Premium SSD managed disks
+- **Availability**: Deploy across Availability Zones
+- **Security**: Use Azure Key Vault, enable disk encryption
+- **Monitoring**: Enable Azure Monitor and Log Analytics
+
+## Multi-Cloud Deployment
+
+Deploy across multiple cloud providers for maximum resilience:
+
+```bash
+# AWS node
+./bin/yugabyted start \
+  --advertise_address=10.1.1.11 \
+  --cloud_location=aws.us-east-1.us-east-1a
+
+# GCP node
+./bin/yugabyted start \
+  --advertise_address=10.2.1.12 \
+  --join=10.1.1.11 \
+  --cloud_location=gcp.us-central1.us-central1-a
+
+# Azure node
+./bin/yugabyted start \
+  --advertise_address=10.3.1.13 \
+  --join=10.1.1.11 \
+  --cloud_location=azure.eastus.eastus-1
+```
+
+## Cost Optimization
+
+### Right-Sizing Instances
+
+| Workload Type | AWS | GCP | Azure |
+|---------------|-----|-----|-------|
+| Development | t3.large | n1-standard-2 | Standard_B2ms |
+| Production (Small) | c5.2xlarge | n2-highcpu-8 | Standard_F8s_v2 |
+| Production (Medium) | c5.4xlarge | n2-highcpu-16 | Standard_F16s_v2 |
+| Production (Large) | c5.9xlarge | n2-highcpu-32 | Standard_F32s_v2 |
+
+### Use Reserved Instances
+
+- **AWS**: Save up to 72% with 3-year reserved instances
+- **GCP**: Save up to 57% with committed use discounts  
+- **Azure**: Save up to 72% with 3-year reservations
+
+### Storage Optimization
+
+- Use appropriate storage tiers (gp3, pd-balanced, Standard SSD)
+- Enable compression to reduce storage costs
+- Implement data lifecycle policies
+
+## Security Considerations
+
+### Encryption
+
+**At Rest:**
+```bash
+./bin/yugabyted start \
+  --tserver_flags="encryption_at_rest_enabled=true"
+```
+
+**In Transit:**  
+```bash
+./bin/yugabyted start --secure
+```
+
+### Network Security
+
+- Use private subnets for database nodes
+- Restrict security groups to necessary ports
+- Enable VPC flow logs
+- Use bastion hosts for SSH access
+
+### Access Control
+
+- Enable YSQL/YCQL authentication
+- Use cloud IAM for service accounts
+- Implement least privilege access
+- Rotate credentials regularly
+
+## Monitoring and Observability
+
+### Cloud-Native Monitoring
+
+**AWS CloudWatch:**
+```bash
+aws cloudwatch put-metric-data \
+  --namespace YugabyteDB \
+  --metric-name ActiveConnections \
+  --value 150
+```
+
+**GCP Cloud Monitoring:**
+```bash
+gcloud monitoring time-series create \
+  --project=my-project
+```
+
+**Azure Monitor:**  
+```bash
+az monitor metrics list \
+  --resource yugabyte-vm
+```
+
+## Backup and Disaster Recovery
+
+### Cloud Storage Backends
+
+```bash
+# AWS S3
+./bin/yb-admin create_snapshot ysql.mydb s3://my-backups/
+
+# GCP Cloud Storage
+./bin/yb-admin create_snapshot ysql.mydb gs://my-backups/
+
+# Azure Blob Storage  
+./bin/yb-admin create_snapshot ysql.mydb azblob://my-backups/
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Configure Security" icon="shield" href="/secure/overview">
+    Set up authentication and encryption
+  </Card>
+  <Card title="Monitor Your Cluster" icon="chart-line" href="/operate/monitoring">
+    Configure monitoring and alerting
+  </Card>
+</CardGroup>

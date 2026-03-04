@@ -1,0 +1,161 @@
+---
+title: YCQL Overview
+description: YugabyteDB Cassandra Query Language API reference
+---
+
+## What is YCQL?
+
+YCQL (YugabyteDB Cassandra Query Language) is a semi-relational SQL API that is compatible with the Apache Cassandra Query Language (CQL). YCQL provides a familiar interface for developers who have experience with Cassandra, while taking advantage of YugabyteDB's distributed SQL capabilities.
+
+## Key Features
+
+### Cassandra Compatibility
+
+YCQL implements a large subset of the Apache Cassandra Query Language, including:
+
+- **CQL Protocol**: Wire-protocol compatible with Cassandra drivers (versions 3.x and 4.x)
+- **Data Types**: Support for most Cassandra data types including primitive types, collections, and UUIDs
+- **DDL Operations**: CREATE/ALTER/DROP for keyspaces and tables
+- **DML Operations**: INSERT, UPDATE, DELETE, and SELECT statements
+- **Secondary Indexes**: Support for creating indexes on non-primary key columns
+- **Prepared Statements**: Parameterized queries with bind variables
+
+### YugabyteDB Enhancements
+
+YCQL extends standard CQL with YugabyteDB-specific features:
+
+- **Distributed Transactions**: Optional ACID transactions across rows and tables
+- **JSONB Support**: Native JSON data type with indexing capabilities
+- **Stronger Consistency**: Configurable consistency levels with stronger defaults
+- **Automatic Sharding**: Transparent data distribution across nodes
+
+## Architecture
+
+### Storage Engine
+
+YCQL uses YugabyteDB's DocDB storage engine, which provides:
+
+- **Automatic Replication**: Configurable replication factor (default: 3)
+- **Tablet Splitting**: Automatic data redistribution as tables grow
+- **Consistency**: Linearizable reads and writes by default
+- **High Availability**: Automatic failover with Raft consensus
+
+### Query Processing
+
+YCQL queries are processed by the YB-TServer (tablet server) layer:
+
+1. Client connects using the CQL binary protocol (port 9042)
+2. Query is parsed and analyzed by the YCQL processor
+3. Execution plan is generated for distributed query execution
+4. Results are returned to the client in CQL format
+
+## Connection Details
+
+### Default Configuration
+
+- **Port**: 9042 (CQL native protocol)
+- **Protocol Version**: v3 and v4 supported
+- **Default Keyspace**: None (must be created)
+- **Authentication**: Optional (disabled by default)
+
+### Client Drivers
+
+YCQL works with standard Cassandra drivers:
+
+```java
+// Java (DataStax Driver)
+Cluster cluster = Cluster.builder()
+    .addContactPoint("127.0.0.1")
+    .build();
+Session session = cluster.connect();
+```
+
+```python
+# Python (DataStax Driver)
+from cassandra.cluster import Cluster
+
+cluster = Cluster(['127.0.0.1'])
+session = cluster.connect()
+```
+
+## Differences from Apache Cassandra
+
+While YCQL maintains compatibility with CQL, there are some key differences:
+
+### Consistency Model
+
+- **Default Consistency**: YCQL uses STRONG consistency by default, while Cassandra defaults to ONE
+- **Consistency Levels**: YCQL supports LOCAL_ONE, QUORUM, and LOCAL_QUORUM
+- **Transactions**: YCQL supports ACID transactions when explicitly enabled
+
+### Data Types
+
+- **JSONB**: YugabyteDB-specific JSON type with indexing support
+- **Collections**: Nested collections are not supported in YCQL
+- **Timestamps**: YCQL supports microsecond precision (flag-controlled)
+
+### Schema Design
+
+- **Primary Keys**: Composite partition keys and clustering keys work similarly
+- **Secondary Indexes**: Available on tables with transactions enabled
+- **Materialized Views**: Not yet supported in YCQL
+
+### System Tables
+
+YCQL provides system tables similar to Cassandra:
+
+- `system_schema.keyspaces` - Keyspace metadata
+- `system_schema.tables` - Table metadata
+- `system_schema.columns` - Column definitions
+- `system.peers` - Cluster node information
+
+## Best Practices
+
+### Schema Design
+
+1. **Choose the right partition key**: Distribute data evenly across tablets
+2. **Use clustering columns for sorting**: Define sort order at schema level
+3. **Avoid hot partitions**: Design keys to prevent uneven data distribution
+4. **Enable transactions when needed**: Use `WITH transactions = {'enabled': true}`
+
+### Query Optimization
+
+1. **Use prepared statements**: Reduce parsing overhead and improve security
+2. **Specify partition keys in WHERE clauses**: Enable efficient lookups
+3. **Limit collection sizes**: Keep map, set, and list sizes reasonable
+4. **Use indexes judiciously**: Create secondary indexes only when necessary
+
+### Data Modeling
+
+1. **Denormalize when appropriate**: Design for query patterns
+2. **Use counter types for incrementing values**: Atomic counter updates
+3. **Leverage TTL for time-series data**: Automatic expiration of old data
+4. **Choose appropriate data types**: Match types to your data requirements
+
+## Next Steps
+
+- Explore [Data Types](/api/ycql/data-types) for detailed type information
+- Learn about [Statements](/api/ycql/statements) for DDL and DML operations
+- Review [Functions](/api/ycql/functions) for built-in functions and expressions
+
+## Compatibility Notes
+
+### Supported CQL Version
+
+YCQL is compatible with Cassandra Query Language version 3.4.2 with extensions.
+
+### Driver Compatibility
+
+Tested with:
+- DataStax Java Driver 3.x and 4.x
+- DataStax Python Driver 3.x
+- DataStax Node.js Driver
+- Other CQL-compatible drivers
+
+### Feature Parity
+
+Most CQL features are supported. Notable exceptions:
+- Materialized views (not yet implemented)
+- User-defined types (partial support)
+- User-defined functions (not supported)
+- Triggers (not supported)

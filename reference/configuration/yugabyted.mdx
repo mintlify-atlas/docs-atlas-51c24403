@@ -1,0 +1,625 @@
+---
+title: yugabyted Reference
+description: Complete reference for yugabyted utility for deploying and managing YugabyteDB clusters
+---
+
+yugabyted is a utility for deploying and managing YugabyteDB clusters. It simplifies the process of creating single-node and multi-node clusters, making it ideal for both local development and production deployments.
+
+<Info>
+yugabyted can be used for production deployments. You can also administer yb-tserver and yb-master servers directly for more granular control.
+</Info>
+
+## Installation
+
+The yugabyted executable is packaged with YugabyteDB and located in the `bin` directory of your YugabyteDB installation.
+
+### YB Controller for Backup/Restore
+
+To use backup and restore features, install the YB Controller service from the `share` directory:
+
+```bash
+cd yugabyte-<version>
+mkdir ybc
+tar -xvf share/ybc-*.tar.gz -C ybc --strip-components=1
+```
+
+Start yugabyted with backup daemon enabled:
+
+```bash
+./bin/yugabyted start --backup_daemon=true
+```
+
+<Warning>
+YB Controller is not supported on macOS.
+</Warning>
+
+## Syntax
+
+```bash
+yugabyted [-h] [command] [flags]
+```
+
+### Example
+
+```bash
+./bin/yugabyted start --advertise_address=10.0.0.1 --base_dir=/data/yb
+```
+
+### Online Help
+
+Display general help:
+
+```bash
+./bin/yugabyted --help
+```
+
+Display help for a specific command:
+
+```bash
+./bin/yugabyted start --help
+```
+
+## Base Directory
+
+By default, yugabyted uses `$HOME/var` to store data, configurations, and logs. You can change this using the `--base_dir` flag:
+
+```bash
+./bin/yugabyted start --base_dir=/home/user/node1
+```
+
+<Warning>
+When using a custom base directory, you must specify it with `--base_dir` in all subsequent commands.
+</Warning>
+
+## Commands
+
+### start
+
+Start a YugabyteDB cluster or add a node to an existing cluster.
+
+#### Syntax
+
+```bash
+yugabyted start [flags]
+```
+
+#### Common Start Flags
+
+<ParamField path="--advertise_address" type="string">
+  IP address or hostname that other nodes use to connect to this node.
+  
+  **Default:** Auto-detected private IP
+</ParamField>
+
+<ParamField path="--base_dir" type="string">
+  Base directory for data, configuration, and logs.
+  
+  **Default:** `$HOME/var`
+</ParamField>
+
+<ParamField path="--cloud_location" type="string">
+  Cloud location in `cloud.region.zone` format for geo-distribution.
+  
+  **Example:** `aws.us-west-2.us-west-2a`
+</ParamField>
+
+<ParamField path="--data_dir" type="string">
+  Directory where data is stored. If not specified, uses `<base_dir>/data`.
+</ParamField>
+
+<ParamField path="--fault_tolerance" type="string">
+  Fault tolerance level for the cluster.
+  
+  **Valid values:** `zone`, `region`, `cloud`
+  
+  **Default:** `none`
+</ParamField>
+
+<ParamField path="--join" type="string">
+  Address of an existing node to join the cluster. Use for multi-node clusters.
+  
+  **Example:** `--join=10.0.0.1`
+</ParamField>
+
+<ParamField path="--listen" type="string">
+  IP address or hostname to bind to for connections.
+  
+  **Default:** `127.0.0.1` (use `0.0.0.0` for all interfaces)
+</ParamField>
+
+<ParamField path="--master_flags" type="string">
+  Comma-separated list of yb-master flags to set.
+  
+  **Example:** `--master_flags="log_cache_size_limit_mb=256,max_log_size=1024"`
+</ParamField>
+
+<ParamField path="--tserver_flags" type="string">
+  Comma-separated list of yb-tserver flags to set.
+  
+  **Example:** `--tserver_flags="memstore_size_mb=512,tablet_enable_ttl_file_filter=true"`
+</ParamField>
+
+<ParamField path="--rf" type="int">
+  Replication factor for the cluster.
+  
+  **Default:** `1` (single-node), `3` (multi-node)
+  
+  **Valid range:** 1-7 (odd numbers recommended)
+</ParamField>
+
+<ParamField path="--ui" type="boolean">
+  Enable the yugabyted UI.
+  
+  **Default:** `true`
+</ParamField>
+
+<ParamField path="--backup_daemon" type="boolean">
+  Start the YB Controller backup daemon.
+  
+  **Default:** `false`
+</ParamField>
+
+<ParamField path="--enable_pg_parity_tech_preview" type="boolean">
+  Enable PostgreSQL parity features (tech preview).
+  
+  **Default:** `false`
+</ParamField>
+
+#### YSQL Flags
+
+<ParamField path="--ysql_port" type="int">
+  Port for YSQL connections.
+  
+  **Default:** `5433`
+</ParamField>
+
+<ParamField path="--enable_ysql" type="boolean">
+  Enable YSQL API.
+  
+  **Default:** `true`
+</ParamField>
+
+#### YCQL Flags
+
+<ParamField path="--ycql_port" type="int">
+  Port for YCQL connections.
+  
+  **Default:** `9042`
+</ParamField>
+
+<ParamField path="--enable_ycql" type="boolean">
+  Enable YCQL API.
+  
+  **Default:** `false`
+</ParamField>
+
+#### Security Flags
+
+<ParamField path="--secure" type="boolean">
+  Enable encryption in transit and authentication.
+  
+  **Default:** `false`
+</ParamField>
+
+<ParamField path="--cert_dir" type="string">
+  Directory containing SSL certificates.
+</ParamField>
+
+<ParamField path="--initial_scripts_dir" type="string">
+  Directory containing SQL scripts to run on first start.
+</ParamField>
+
+#### Example: Start a Multi-Node Cluster
+
+```bash
+# Node 1 (first node)
+./bin/yugabyted start \
+  --advertise_address=10.0.0.1 \
+  --base_dir=/data/node1 \
+  --cloud_location=aws.us-west-2.us-west-2a
+
+# Node 2
+./bin/yugabyted start \
+  --advertise_address=10.0.0.2 \
+  --base_dir=/data/node2 \
+  --join=10.0.0.1 \
+  --cloud_location=aws.us-west-2.us-west-2b
+
+# Node 3
+./bin/yugabyted start \
+  --advertise_address=10.0.0.3 \
+  --base_dir=/data/node3 \
+  --join=10.0.0.1 \
+  --cloud_location=aws.us-west-2.us-west-2c
+```
+
+### status
+
+Display the status of a yugabyted cluster.
+
+#### Syntax
+
+```bash
+yugabyted status [flags]
+```
+
+#### Flags
+
+<ParamField path="--base_dir" type="string">
+  Base directory of the yugabyted node.
+  
+  **Default:** `$HOME/var`
+</ParamField>
+
+#### Example
+
+```bash
+./bin/yugabyted status --base_dir=/data/node1
+```
+
+### stop
+
+Stop a yugabyted cluster or node.
+
+#### Syntax
+
+```bash
+yugabyted stop [flags]
+```
+
+#### Flags
+
+<ParamField path="--base_dir" type="string">
+  Base directory of the yugabyted node to stop.
+  
+  **Default:** `$HOME/var`
+</ParamField>
+
+#### Example
+
+```bash
+./bin/yugabyted stop --base_dir=/data/node1
+```
+
+### destroy
+
+Destroy a yugabyted cluster and delete all data.
+
+#### Syntax
+
+```bash
+yugabyted destroy [flags]
+```
+
+<Warning>
+This command permanently deletes all cluster data. Use with caution.
+</Warning>
+
+#### Flags
+
+<ParamField path="--base_dir" type="string">
+  Base directory of the yugabyted node to destroy.
+  
+  **Default:** `$HOME/var`
+</ParamField>
+
+#### Example
+
+```bash
+./bin/yugabyted destroy --base_dir=/data/node1
+```
+
+### connect
+
+Connect to the cluster using ysqlsh or ycqlsh.
+
+#### Syntax
+
+```bash
+yugabyted connect [ysql|ycql] [flags]
+```
+
+#### YSQL Flags
+
+<ParamField path="--username" type="string">
+  YSQL username to connect.
+  
+  **Default:** `yugabyte`
+</ParamField>
+
+<ParamField path="--password" type="string">
+  Password for YSQL user.
+</ParamField>
+
+<ParamField path="--database" type="string">
+  Name of the database to connect to.
+  
+  **Default:** `yugabyte`
+</ParamField>
+
+<ParamField path="--base_dir" type="string">
+  Base directory of the yugabyted node.
+  
+  **Default:** `$HOME/var`
+</ParamField>
+
+#### Example
+
+```bash
+# Connect with YSQL
+./bin/yugabyted connect ysql
+
+# Connect with YCQL
+./bin/yugabyted connect ycql
+```
+
+### configure
+
+Configure cluster-level settings.
+
+#### Syntax
+
+```bash
+yugabyted configure [flags]
+```
+
+#### Flags
+
+<ParamField path="--data_placement_constraint" type="string">
+  Data placement constraint for the cluster in `cloud.region.zone:num_replicas` format.
+  
+  **Example:** `aws.us-west-2.us-west-2a:1,aws.us-west-2.us-west-2b:1,aws.us-west-2.us-west-2c:1`
+</ParamField>
+
+<ParamField path="--fault_tolerance" type="string">
+  Set fault tolerance level.
+  
+  **Valid values:** `zone`, `region`, `cloud`
+</ParamField>
+
+<ParamField path="--rf" type="int">
+  Set replication factor.
+</ParamField>
+
+### configure_read_replica
+
+Configure, modify, or delete read replica clusters.
+
+#### Syntax
+
+```bash
+yugabyted configure_read_replica [new|modify|delete] [flags]
+```
+
+#### Create New Read Replica
+
+```bash
+yugabyted configure_read_replica new \
+  --rf=1 \
+  --data_placement_constraint=aws.us-east-1.us-east-1a
+```
+
+#### Modify Read Replica
+
+```bash
+yugabyted configure_read_replica modify \
+  --rf=2 \
+  --data_placement_constraint=aws.us-east-1.us-east-1a,aws.us-east-1.us-east-1b
+```
+
+#### Delete Read Replica
+
+```bash
+yugabyted configure_read_replica delete
+```
+
+### backup
+
+Create a backup of a YugabyteDB database.
+
+<Info>
+Requires YB Controller to be running (`--backup_daemon=true`).
+</Info>
+
+#### Syntax
+
+```bash
+yugabyted backup [flags]
+```
+
+#### Flags
+
+<ParamField path="--namespace" type="string" required>
+  Database namespace to backup.
+</ParamField>
+
+<ParamField path="--backup_location" type="string" required>
+  Backup storage location (S3, GCS, Azure, or NFS path).
+  
+  **Examples:**
+  - S3: `s3://bucket-name/path`
+  - GCS: `gs://bucket-name/path`
+  - Azure: `https://account.blob.core.windows.net/container/path`
+  - NFS: `/mnt/backup/path`
+</ParamField>
+
+#### Example: Backup to AWS S3
+
+```bash
+yugabyted backup \
+  --namespace=yugabyte \
+  --backup_location=s3://my-bucket/backups/$(date +%Y%m%d)
+```
+
+### restore
+
+Restore a YugabyteDB database from a backup.
+
+#### Syntax
+
+```bash
+yugabyted restore [flags]
+```
+
+#### Flags
+
+<ParamField path="--namespace" type="string" required>
+  Target database namespace for restore.
+</ParamField>
+
+<ParamField path="--backup_location" type="string" required>
+  Location of the backup to restore from.
+</ParamField>
+
+#### Example
+
+```bash
+yugabyted restore \
+  --namespace=yugabyte \
+  --backup_location=s3://my-bucket/backups/20260304
+```
+
+### version
+
+Display the YugabyteDB version.
+
+#### Syntax
+
+```bash
+yugabyted version
+```
+
+### collect_logs
+
+Collect logs from the cluster for troubleshooting.
+
+#### Syntax
+
+```bash
+yugabyted collect_logs [flags]
+```
+
+#### Flags
+
+<ParamField path="--base_dir" type="string">
+  Base directory of the yugabyted node.
+  
+  **Default:** `$HOME/var`
+</ParamField>
+
+<ParamField path="--stdout" type="boolean">
+  Output logs to stdout instead of a file.
+  
+  **Default:** `false`
+</ParamField>
+
+### demo
+
+Start a demo cluster with sample data.
+
+#### Syntax
+
+```bash
+yugabyted demo [command] [flags]
+```
+
+#### Commands
+
+- `connect` - Connect to the demo cluster
+- `destroy` - Destroy the demo cluster
+
+#### Example
+
+```bash
+# Start demo
+yugabyted demo
+
+# Connect to demo
+yugabyted demo connect
+
+# Destroy demo
+yugabyted demo destroy
+```
+
+## Configuration Best Practices
+
+### Production Deployments
+
+1. **Use dedicated directories for data**
+   ```bash
+   --base_dir=/data/yugabyte --data_dir=/data/yugabyte/data
+   ```
+
+2. **Set appropriate replication factor**
+   ```bash
+   --rf=3  # For high availability
+   ```
+
+3. **Configure cloud location for geo-distribution**
+   ```bash
+   --cloud_location=aws.us-west-2.us-west-2a
+   ```
+
+4. **Enable security features**
+   ```bash
+   --secure --cert_dir=/etc/yugabyte/certs
+   ```
+
+5. **Tune flags for workload**
+   ```bash
+   --tserver_flags="memstore_size_mb=1024,tablet_enable_ttl_file_filter=true"
+   ```
+
+### Multi-Region Setup
+
+```bash
+# Region 1 - Node 1
+yugabyted start \
+  --advertise_address=10.0.1.1 \
+  --cloud_location=aws.us-west-2.us-west-2a \
+  --fault_tolerance=region \
+  --rf=3
+
+# Region 2 - Node 2
+yugabyted start \
+  --advertise_address=10.0.2.1 \
+  --cloud_location=aws.us-east-1.us-east-1a \
+  --join=10.0.1.1 \
+  --fault_tolerance=region \
+  --rf=3
+
+# Region 3 - Node 3
+yugabyted start \
+  --advertise_address=10.0.3.1 \
+  --cloud_location=aws.eu-west-1.eu-west-1a \
+  --join=10.0.1.1 \
+  --fault_tolerance=region \
+  --rf=3
+```
+
+## Troubleshooting
+
+### Check Cluster Status
+
+```bash
+yugabyted status
+```
+
+### Collect Logs
+
+```bash
+yugabyted collect_logs --base_dir=/data/node1
+```
+
+### Common Issues
+
+1. **Port conflicts** - Ensure ports 5433 (YSQL), 9042 (YCQL), 7000 (Master UI), 9000 (TServer UI) are available
+2. **Network connectivity** - Verify firewall rules allow communication between nodes
+3. **Disk space** - Ensure adequate disk space in base_dir and data_dir
+4. **Clock skew** - Verify NTP is configured and clocks are synchronized
+
+## See Also
+
+- [yb-master Configuration](/reference/configuration/yb-master)
+- [yb-tserver Configuration](/reference/configuration/yb-tserver)
+- [Configuration Flags Reference](/reference/configuration/flags)

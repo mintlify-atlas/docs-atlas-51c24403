@@ -1,0 +1,470 @@
+---
+title: Drivers and ORMs
+description: Connect your applications with supported drivers and ORMs
+icon: 'plug'
+---
+
+Applications connect to and interact with YugabyteDB using API client libraries (also known as drivers). YugabyteDB supports both PostgreSQL-compatible drivers for YSQL and Cassandra-compatible drivers for YCQL.
+
+## Driver Types
+
+YugabyteDB supports two types of drivers:
+
+### Standard PostgreSQL Drivers
+
+Because YugabyteDB YSQL is PostgreSQL-compatible, you can use standard PostgreSQL drivers to connect and work with YugabyteDB. These drivers provide full compatibility with PostgreSQL applications.
+
+### YugabyteDB Smart Drivers
+
+Smart drivers extend the upstream PostgreSQL drivers with cluster-aware capabilities:
+
+- **Load balancing**: Distribute connections across cluster nodes
+- **Topology awareness**: Connect to geographically closest nodes
+- **Automatic failover**: Handle node failures transparently
+- **Connection pooling**: Efficient connection management
+
+<Tip>
+For production deployments, we recommend using YugabyteDB Smart Drivers for optimal performance and resilience.
+</Tip>
+
+## Supported Drivers by Language
+
+### Java
+
+YugabyteDB provides comprehensive Java driver support:
+
+<CardGroup cols={2}>
+  <Card title="YugabyteDB JDBC Smart Driver" icon="star">
+    **Recommended for production**
+    - Cluster-aware load balancing
+    - Topology-aware connection routing
+    - Built on PostgreSQL JDBC driver
+    
+    ```xml
+    <dependency>
+      <groupId>com.yugabyte</groupId>
+      <artifactId>jdbc-yugabytedb</artifactId>
+      <version>42.3.5-yb-5</version>
+    </dependency>
+    ```
+  </Card>
+  
+  <Card title="PostgreSQL JDBC Driver" icon="java">
+    Standard PostgreSQL driver
+    
+    ```xml
+    <dependency>
+      <groupId>org.postgresql</groupId>
+      <artifactId>postgresql</artifactId>
+      <version>42.2.14</version>
+    </dependency>
+    ```
+  </Card>
+</CardGroup>
+
+**Connection Example:**
+
+<CodeGroup>
+```java Smart Driver
+import com.yugabyte.ysql.YBClusterAwareDataSource;
+
+YBClusterAwareDataSource ds = new YBClusterAwareDataSource();
+ds.setUrl("jdbc:postgresql://localhost:5433/yugabyte");
+ds.setUser("yugabyte");
+ds.setPassword("yugabyte");
+
+Connection conn = ds.getConnection();
+```
+
+```java Standard JDBC
+import java.sql.DriverManager;
+import java.sql.Connection;
+
+String url = "jdbc:postgresql://localhost:5433/yugabyte";
+Connection conn = DriverManager.getConnection(
+    url, "yugabyte", "yugabyte"
+);
+```
+</CodeGroup>
+
+**ORMs:**
+- **Hibernate**: Full JPA support
+- **MyBatis**: SQL mapping framework
+- **Ebean**: Simplicity and performance
+- **Spring Data JPA**: Spring integration
+
+### Python
+
+Python developers can use Psycopg2, Psycopg3, or the YugabyteDB smart driver.
+
+<CardGroup cols={2}>
+  <Card title="Yugabyte Psycopg2" icon="star">
+    **Recommended for production**
+    
+    ```bash
+    pip install yugabyte-psycopg2
+    ```
+  </Card>
+  
+  <Card title="PostgreSQL Psycopg2" icon="python">
+    Standard PostgreSQL adapter
+    
+    ```bash
+    pip install psycopg2-binary
+    ```
+  </Card>
+</CardGroup>
+
+**Connection Example:**
+
+<CodeGroup>
+```python Psycopg2
+import psycopg2
+
+conn = psycopg2.connect(
+    host="localhost",
+    port=5433,
+    database="yugabyte",
+    user="yugabyte",
+    password="yugabyte"
+)
+
+cursor = conn.cursor()
+cursor.execute("SELECT version()")
+print(cursor.fetchone())
+```
+
+```python Psycopg3
+import psycopg
+
+with psycopg.connect(
+    "host=localhost port=5433 dbname=yugabyte user=yugabyte password=yugabyte"
+) as conn:
+    with conn.cursor() as cur:
+        cur.execute("SELECT version()")
+        print(cur.fetchone())
+```
+
+```python Async (aiopg)
+import asyncio
+import aiopg
+
+async def main():
+    async with aiopg.create_pool(
+        host="localhost",
+        port=5433,
+        database="yugabyte",
+        user="yugabyte",
+        password="yugabyte"
+    ) as pool:
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("SELECT * FROM users")
+                rows = await cur.fetchall()
+                print(rows)
+
+asyncio.run(main())
+```
+</CodeGroup>
+
+**ORMs:**
+- **SQLAlchemy**: Popular Python ORM
+- **Django ORM**: Built-in Django support
+
+### Node.js
+
+Node.js applications use the node-postgres (pg) driver.
+
+```bash
+npm install pg
+```
+
+**Connection Example:**
+
+<CodeGroup>
+```javascript Basic Connection
+const { Client } = require('pg');
+
+const client = new Client({
+  host: 'localhost',
+  port: 5433,
+  database: 'yugabyte',
+  user: 'yugabyte',
+  password: 'yugabyte'
+});
+
+await client.connect();
+
+const res = await client.query('SELECT * FROM users WHERE id = $1', [1]);
+console.log(res.rows[0]);
+
+await client.end();
+```
+
+```javascript Connection Pool
+const { Pool } = require('pg');
+
+const pool = new Pool({
+  host: 'localhost',
+  port: 5433,
+  database: 'yugabyte',
+  user: 'yugabyte',
+  password: 'yugabyte',
+  max: 20,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 2000,
+});
+
+const result = await pool.query('SELECT NOW()');
+console.log(result.rows);
+```
+</CodeGroup>
+
+**ORMs:**
+- **Prisma**: Modern ORM with type safety
+- **Sequelize**: Feature-rich ORM
+- **TypeORM**: TypeScript-first ORM
+
+### Go
+
+Go applications can use pgx or the standard database/sql interface.
+
+```bash
+go get github.com/lib/pq
+go get github.com/jackc/pgx/v5
+```
+
+**Connection Example:**
+
+<CodeGroup>
+```go lib/pq
+import (
+    "database/sql"
+    _ "github.com/lib/pq"
+)
+
+connStr := "host=localhost port=5433 user=yugabyte password=yugabyte dbname=yugabyte sslmode=disable"
+db, err := sql.Open("postgres", connStr)
+if err != nil {
+    log.Fatal(err)
+}
+defer db.Close()
+
+rows, err := db.Query("SELECT id, username FROM users")
+if err != nil {
+    log.Fatal(err)
+}
+defer rows.Close()
+```
+
+```go pgx
+import (
+    "context"
+    "github.com/jackc/pgx/v5"
+)
+
+conn, err := pgx.Connect(context.Background(), 
+    "postgres://yugabyte:yugabyte@localhost:5433/yugabyte")
+if err != nil {
+    log.Fatal(err)
+}
+defer conn.Close(context.Background())
+
+var username string
+err = conn.QueryRow(context.Background(), 
+    "SELECT username FROM users WHERE id=$1", 1).Scan(&username)
+```
+</CodeGroup>
+
+**ORMs:**
+- **GORM**: Feature-rich ORM
+- **sqlx**: Extensions to database/sql
+
+### C# / .NET
+
+Use Npgsql driver for .NET applications.
+
+```bash
+dotnet add package Npgsql
+```
+
+**Connection Example:**
+
+```csharp
+using Npgsql;
+
+string connString = "Host=localhost;Port=5433;Username=yugabyte;Password=yugabyte;Database=yugabyte";
+
+using (var conn = new NpgsqlConnection(connString))
+{
+    conn.Open();
+    
+    using (var cmd = new NpgsqlCommand("SELECT username FROM users WHERE id = @id", conn))
+    {
+        cmd.Parameters.AddWithValue("id", 1);
+        var username = cmd.ExecuteScalar();
+        Console.WriteLine(username);
+    }
+}
+```
+
+**ORMs:**
+- **Entity Framework Core**: Microsoft's ORM
+- **Dapper**: Micro-ORM for .NET
+
+### Ruby
+
+Use the pg gem for Ruby applications.
+
+```bash
+gem install pg
+```
+
+**Connection Example:**
+
+```ruby
+require 'pg'
+
+conn = PG.connect(
+  host: 'localhost',
+  port: 5433,
+  dbname: 'yugabyte',
+  user: 'yugabyte',
+  password: 'yugabyte'
+)
+
+result = conn.exec('SELECT * FROM users')
+result.each do |row|
+  puts row['username']
+end
+
+conn.close
+```
+
+**ORMs:**
+- **Active Record**: Rails default ORM
+
+## YCQL Drivers (Cassandra Compatible)
+
+For applications using YCQL (Cassandra-compatible API):
+
+### Java
+```xml
+<dependency>
+  <groupId>com.yugabyte</groupId>
+  <artifactId>cassandra-driver-core</artifactId>
+  <version>3.10.3-yb-2</version>
+</dependency>
+```
+
+### Python
+```bash
+pip install yb-cassandra-driver
+```
+
+### Node.js
+```bash
+npm install cassandra-driver
+```
+
+## Connection Pooling
+
+Connection pooling is essential for production applications:
+
+<AccordionGroup>
+  <Accordion title="Java - HikariCP">
+    ```java
+    HikariConfig config = new HikariConfig();
+    config.setJdbcUrl("jdbc:postgresql://localhost:5433/yugabyte");
+    config.setUsername("yugabyte");
+    config.setPassword("yugabyte");
+    config.setMaximumPoolSize(10);
+    
+    HikariDataSource ds = new HikariDataSource(config);
+    ```
+  </Accordion>
+
+  <Accordion title="Python - SQLAlchemy">
+    ```python
+    from sqlalchemy import create_engine
+    
+    engine = create_engine(
+        'postgresql://yugabyte:yugabyte@localhost:5433/yugabyte',
+        pool_size=10,
+        max_overflow=20
+    )
+    ```
+  </Accordion>
+
+  <Accordion title="Node.js - pg-pool">
+    ```javascript
+    const { Pool } = require('pg');
+    
+    const pool = new Pool({
+      max: 20,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 2000,
+    });
+    ```
+  </Accordion>
+
+  <Accordion title="YSQL Connection Manager">
+    YugabyteDB includes a built-in connection pooler that provides connection pooling without external dependencies.
+    
+    Enable it on the server side for automatic connection management.
+  </Accordion>
+</AccordionGroup>
+
+## SSL/TLS Configuration
+
+For secure connections in production:
+
+<CodeGroup>
+```java Java
+String url = "jdbc:postgresql://hostname:5433/yugabyte" +
+             "?ssl=true&sslmode=verify-full" +
+             "&sslrootcert=/path/to/root.crt";
+Connection conn = DriverManager.getConnection(url, user, password);
+```
+
+```python Python
+conn = psycopg2.connect(
+    host="hostname",
+    port=5433,
+    database="yugabyte",
+    user="user",
+    password="password",
+    sslmode="verify-full",
+    sslrootcert="/path/to/root.crt"
+)
+```
+
+```javascript Node.js
+const client = new Client({
+  host: 'hostname',
+  port: 5433,
+  database: 'yugabyte',
+  ssl: {
+    rejectUnauthorized: true,
+    ca: fs.readFileSync('/path/to/root.crt').toString(),
+  }
+});
+```
+</CodeGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Build Apps" icon="code" href="/develop/build-apps">
+    Start building your first application
+  </Card>
+  <Card title="Best Practices" icon="star" href="/develop/best-practices">
+    Follow driver best practices
+  </Card>
+  <Card title="Smart Drivers" icon="brain" href="https://docs.yugabyte.com/stable/develop/drivers-orms/smart-drivers/">
+    Learn about smart driver features
+  </Card>
+  <Card title="Connection Manager" icon="server" href="https://docs.yugabyte.com/stable/additional-features/connection-manager-ysql/">
+    Use built-in connection pooling
+  </Card>
+</CardGroup>

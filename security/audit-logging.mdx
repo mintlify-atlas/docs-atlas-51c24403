@@ -1,0 +1,484 @@
+---
+title: Audit Logging
+description: Track and monitor database activities with comprehensive audit logging in YugabyteDB
+---
+
+Audit logging records database activities to help meet compliance requirements and security policies. YugabyteDB uses the PostgreSQL Audit Extension (pgaudit) for YSQL to provide detailed session and object-level audit logging.
+
+## Overview
+
+Audit logging captures:
+
+- **Session Audit Logging**: Logs statements based on their type (DDL, DML, SELECT, etc.)
+- **Object Audit Logging**: Logs access to specific database objects (tables, functions, etc.)
+- **User Activity**: Tracks which users executed which statements
+- **Connection Information**: Records client IP addresses, application names, and connection details
+- **Timestamp Information**: Provides precise timing for all audited operations
+
+## Enable Audit Logging
+
+### Step 1: Configure YB-TServer
+
+Enable pgaudit at cluster startup using the `--ysql_pg_conf_csv` flag:
+
+```bash
+yb-tserver \
+  --ysql_pg_conf_csv="pgaudit.log='all',pgaudit.log_parameter=on,pgaudit.log_relation=on,pgaudit.log_catalog=off"
+```
+
+For production deployments with comprehensive logging:
+
+```bash
+yb-tserver \
+  --ysql_pg_conf_csv="\
+log_line_prefix='%m [%p %l %c] %q[%C %R %Z %H] [%r %a %u %d] ',\
+pgaudit.log='all,-misc',\
+pgaudit.log_parameter=on,\
+pgaudit.log_relation=on,\
+pgaudit.log_catalog=off,\
+suppress_nonpg_logs=on"
+```
+
+### Step 2: Create pgaudit Extension
+
+After starting the cluster, create the pgaudit extension:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS pgaudit;
+```
+
+This command only needs to be run once on any node—it applies cluster-wide.
+
+## Configuration Options
+
+Customize audit logging behavior with pgaudit flags:
+
+### pgaudit.log
+
+Specifies which statement classes to log:
+
+| Class | Description |
+|-------|-------------|
+| `READ` | SELECT, COPY when reading from tables |
+| `WRITE` | INSERT, UPDATE, DELETE, TRUNCATE, COPY when writing |
+| `FUNCTION` | Function calls and DO blocks |
+| `ROLE` | GRANT, REVOKE, CREATE/ALTER/DROP ROLE |
+| `DDL` | CREATE, ALTER, DROP statements (excluding ROLE) |
+| `MISC` | DISCARD, FETCH, CHECKPOINT, VACUUM, SET |
+| `ALL` | All of the above |
+
+```bash
+# Log only DDL and WRITE operations
+--ysql_pg_conf_csv="pgaudit.log='DDL,WRITE'"
+
+# Log everything except MISC
+--ysql_pg_conf_csv="pgaudit.log='all,-misc'"
+```
+
+### pgaudit.log_catalog
+
+Controls logging of system catalog queries:
+
+```bash
+# Disable catalog logging to reduce noise
+--ysql_pg_conf_csv="pgaudit.log_catalog=off"
+```
+
+<Warning>
+  System catalog queries generate significant log volume. Disable `pgaudit.log_catalog` unless you specifically need to audit metadata access.
+</Warning>
+
+### pgaudit.log_parameter
+
+Includes statement parameters in logs:
+
+```bash
+# Enable parameter logging
+--ysql_pg_conf_csv="pgaudit.log_parameter=on"
+```
+
+### pgaudit.log_relation
+
+Creates separate log entries for each table referenced:
+
+```bash
+# Log each table access separately
+--ysql_pg_conf_csv="pgaudit.log_relation=on"
+```
+
+### pgaudit.log_statement
+
+Includes statement text in logs:
+
+```bash
+# Include full statement text (default: on)
+--ysql_pg_conf_csv="pgaudit.log_statement=on"
+```
+
+### pgaudit.log_statement_once
+
+Logs statement text only once per statement:
+
+```bash
+# Reduce verbosity by logging statement once
+--ysql_pg_conf_csv="pgaudit.log_statement_once=on"
+```
+
+### Complete Configuration Example
+
+```bash
+yb-tserver \
+  --ysql_pg_conf_csv="\
+log_line_prefix='%m [%p %l %c] %q[%C %R %Z %H] [%r %a %u %d] ',\
+pgaudit.log='DDL,WRITE,ROLE',\
+pgaudit.log_catalog=off,\
+pgaudit.log_client=off,\
+pgaudit.log_level=log,\
+pgaudit.log_parameter=on,\
+pgaudit.log_relation=on,\
+pgaudit.log_statement=on,\
+pgaudit.log_statement_once=off,\
+suppress_nonpg_logs=on"
+```
+
+## Session-Level Audit Logging
+
+Change audit settings for the current session using SQL:
+
+```sql
+-- Enable DDL logging for this session
+SET pgaudit.log = 'DDL';
+
+-- Enable all logging
+SET pgaudit.log = 'ALL';
+
+-- Enable parameter logging
+SET pgaudit.log_parameter = on;
+
+-- Enable client logging (output to console)
+SET pgaudit.log_client = on;
+SET pgaudit.log_level = 'NOTICE';
+```
+
+## Object-Level Audit Logging
+
+Audit specific database objects using the `pgaudit.role` mechanism.
+
+### Step 1: Create Audit Role
+
+```sql
+-- Create audit role
+CREATE ROLE auditor;
+
+-- Configure pgaudit to use this role
+SET pgaudit.role = 'auditor';
+```
+
+### Step 2: Grant Privileges to Audit Role
+
+```sql
+-- Audit all SELECT operations on employees table
+GRANT SELECT ON employees TO auditor;
+
+-- Audit INSERT and UPDATE on sensitive_data table
+GRANT INSERT, UPDATE ON sensitive_data TO auditor;
+
+-- Audit function executions
+GRANT EXECUTE ON FUNCTION calculate_bonus(int) TO auditor;
+
+-- Audit all operations on a schema
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO auditor;
+```
+
+### Step 3: Use Audit Roles
+
+```sql
+-- Set role for session or cluster
+ALTER DATABASE mydb SET pgaudit.role = 'auditor';
+
+-- Now all matching operations are logged
+SELECT * FROM employees WHERE id = 1;  -- This will be audited
+```
+
+## Audit Log Format
+
+Audit logs are written to YB-TServer log files with this format:
+
+```
+<timestamp> [<pid> <line> <session>] [<cloud> <region> <zone> <node>] [<remote> <app> <user> <db>] LOG: AUDIT: <audit_type>,<statement_id>,<substatement_id>,<class>,<command>,<object_type>,<object_name>,<statement>,<parameters>
+```
+
+### Example Log Entry
+
+```
+2024-01-15 14:23:45.123 UTC [12345 1 abc123] [cloud1 us-west-2 us-west-2a node1] [10.0.1.100:54321 myapp appuser mydb] LOG: AUDIT: SESSION,1,1,WRITE,INSERT,TABLE,public.employees,"INSERT INTO employees (name, salary) VALUES ($1, $2)","'John Doe',75000"
+```
+
+### Log Fields
+
+- **timestamp**: When the statement executed
+- **pid**: Process ID
+- **session**: Session identifier
+- **cloud/region/zone/node**: Cluster topology information
+- **remote**: Client IP and port
+- **app**: Application name
+- **user**: Database user
+- **db**: Database name
+- **audit_type**: SESSION or OBJECT
+- **statement_id**: Statement identifier within session
+- **class**: Statement class (WRITE, READ, DDL, etc.)
+- **command**: SQL command (INSERT, SELECT, CREATE TABLE, etc.)
+- **object_type**: Type of object accessed (TABLE, FUNCTION, etc.)
+- **object_name**: Fully qualified object name
+- **statement**: SQL statement text
+- **parameters**: Statement parameters (if log_parameter=on)
+
+## Access Audit Logs
+
+Audit logs are written to YB-TServer log files:
+
+```bash
+# View audit logs
+tail -f /mnt/disk0/yb-data/tserver/logs/yb-tserver.INFO
+
+# Search for specific user activity
+grep "user=appuser" /mnt/disk0/yb-data/tserver/logs/yb-tserver.INFO | grep AUDIT
+
+# Find all DDL operations
+grep "AUDIT.*DDL" /mnt/disk0/yb-data/tserver/logs/yb-tserver.INFO
+
+# Track specific table access
+grep "AUDIT.*employees" /mnt/disk0/yb-data/tserver/logs/yb-tserver.INFO
+```
+
+## Audit Logging Examples
+
+### Example 1: Basic DDL Auditing
+
+```sql
+-- Enable DDL logging
+SET pgaudit.log = 'DDL';
+SET pgaudit.log_client = ON;
+SET pgaudit.log_level = 'NOTICE';
+
+-- This will be logged
+CREATE TABLE products (
+  id SERIAL PRIMARY KEY,
+  name TEXT,
+  price DECIMAL
+);
+```
+
+Audit output:
+
+```
+NOTICE: AUDIT: SESSION,1,1,DDL,CREATE TABLE,TABLE,public.products,
+"CREATE TABLE products (id SERIAL PRIMARY KEY, name TEXT, price DECIMAL);",<not logged>
+```
+
+### Example 2: Track Data Modifications
+
+```sql
+-- Enable write operation logging
+SET pgaudit.log = 'WRITE';
+SET pgaudit.log_parameter = ON;
+
+-- These operations will be logged with parameters
+INSERT INTO employees (name, salary) VALUES ('Alice', 80000);
+UPDATE employees SET salary = 85000 WHERE name = 'Alice';
+DELETE FROM employees WHERE name = 'Alice';
+```
+
+### Example 3: Audit Sensitive Table Access
+
+```sql
+-- Create audit role for sensitive data
+CREATE ROLE sensitive_data_auditor;
+
+-- Grant SELECT privilege (this enables auditing)
+GRANT SELECT ON credit_cards TO sensitive_data_auditor;
+
+-- Configure cluster-wide
+ALTER DATABASE mydb SET pgaudit.role = 'sensitive_data_auditor';
+
+-- Now all SELECT queries on credit_cards are logged
+SELECT * FROM credit_cards WHERE user_id = 123;
+```
+
+### Example 4: Comprehensive Transaction Auditing
+
+```bash
+# Start cluster with comprehensive logging
+yb-tserver \
+  --ysql_pg_conf_csv="\
+log_line_prefix='%m [%p %l %c] %q[%C %R %Z %H] [%r %a %u %d] ',\
+pgaudit.log='all',\
+pgaudit.log_parameter=on,\
+pgaudit.log_relation=on,\
+pgaudit.log_catalog=off,\
+suppress_nonpg_logs=on"
+```
+
+```sql
+-- Execute transaction (all operations logged)
+BEGIN;
+INSERT INTO accounts (id, balance) VALUES (1, 1000);
+INSERT INTO transactions (account_id, amount) VALUES (1, 1000);
+COMMIT;
+```
+
+Log output:
+
+```
+2024-01-15 14:30:00.000 LOG: AUDIT: SESSION,1,1,MISC,BEGIN,,,BEGIN;,<none>
+2024-01-15 14:30:00.001 LOG: AUDIT: SESSION,2,1,WRITE,INSERT,TABLE,public.accounts,"INSERT INTO accounts (id, balance) VALUES (1, 1000);",<none>
+2024-01-15 14:30:00.002 LOG: AUDIT: SESSION,3,1,WRITE,INSERT,TABLE,public.transactions,"INSERT INTO transactions (account_id, amount) VALUES (1, 1000);",<none>
+2024-01-15 14:30:00.003 LOG: AUDIT: SESSION,4,1,MISC,COMMIT,,,COMMIT;,<none>
+```
+
+## Export and Analyze Audit Logs
+
+### Export to JSON
+
+Parse and export audit logs to JSON for analysis:
+
+```bash
+# Extract audit logs and convert to JSON format
+grep "AUDIT:" /mnt/disk0/yb-data/tserver/logs/yb-tserver.INFO | \
+  python3 -c '
+import sys
+import json
+import re
+
+for line in sys.stdin:
+    match = re.search(r"AUDIT: (.*)", line)
+    if match:
+        fields = match.group(1).split(",", 8)
+        print(json.dumps({
+            "audit_type": fields[0],
+            "statement_id": fields[1],
+            "class": fields[3],
+            "command": fields[4],
+            "object_type": fields[5],
+            "object_name": fields[6],
+            "statement": fields[7] if len(fields) > 7 else ""
+        }))
+'
+```
+
+### Ship to Log Aggregator
+
+Forward logs to centralized logging systems:
+
+```bash
+# Using Filebeat to ship to Elasticsearch
+filebeat.inputs:
+- type: log
+  paths:
+    - /mnt/disk0/yb-data/tserver/logs/yb-tserver.INFO
+  include_lines: ['AUDIT:']
+
+output.elasticsearch:
+  hosts: ["elasticsearch:9200"]
+```
+
+### Query with Splunk
+
+```spl
+index=yugabyte sourcetype="yb-tserver" "AUDIT:" 
+| rex field=_raw "AUDIT: (?<audit_type>\w+),(?<statement_id>\d+),(?<substatement_id>\d+),(?<class>\w+),(?<command>[^,]+),(?<object_type>[^,]*),(?<object_name>[^,]*),(?<statement>[^,]*),(?<parameters>.*)"
+| stats count by user, class, command
+```
+
+## Audit Logging Best Practices
+
+1. **Define Audit Scope**: Only log what's required for compliance—excessive logging impacts performance
+2. **Disable Catalog Logging**: Set `pgaudit.log_catalog=off` to reduce noise
+3. **Use Object Auditing**: For granular control, use object-level auditing instead of session-level
+4. **Rotate Logs**: Configure log rotation to prevent disk space issues
+5. **Centralize Logs**: Forward audit logs to a SIEM or log management system
+6. **Monitor Log Volume**: Track log file sizes and adjust audit scope if needed
+7. **Secure Logs**: Restrict access to audit log files (chmod 600)
+8. **Regular Review**: Periodically review audit logs for suspicious activity
+9. **Test Recovery**: Ensure you can recover and analyze audit logs
+10. **Document Policies**: Maintain documentation of audit policies and retention periods
+
+## Performance Impact
+
+Audit logging has minimal performance overhead:
+
+- **Full audit logging**: 5-10% throughput reduction
+- **Targeted auditing**: 1-3% overhead
+- **Object-level auditing**: less than 1% overhead
+
+### Optimization Tips
+
+1. Audit only required statement classes
+2. Disable catalog logging
+3. Use `pgaudit.log_statement_once=on` to reduce verbosity
+4. Implement log rotation and archival
+5. Consider sampling for high-volume operations
+
+## Compliance Requirements
+
+Audit logging helps meet various compliance standards:
+
+- **PCI-DSS**: Track access to cardholder data
+- **HIPAA**: Log access to protected health information
+- **SOX**: Audit financial data modifications
+- **GDPR**: Track personal data access and modifications
+- **SOC 2**: Demonstrate security controls and monitoring
+
+### PCI-DSS Example Configuration
+
+```bash
+# PCI-DSS requires logging access to cardholder data
+yb-tserver \
+  --ysql_pg_conf_csv="\
+log_line_prefix='%m [%p] [%r] [%u@%d] ',\
+pgaudit.log='READ,WRITE',\
+pgaudit.log_parameter=off,\
+pgaudit.log_relation=on,\
+pgaudit.log_catalog=off"
+```
+
+```sql
+-- Audit role for PCI compliance
+CREATE ROLE pci_auditor;
+GRANT SELECT, INSERT, UPDATE, DELETE ON credit_cards TO pci_auditor;
+GRANT SELECT, INSERT, UPDATE, DELETE ON payment_transactions TO pci_auditor;
+ALTER DATABASE mydb SET pgaudit.role = 'pci_auditor';
+```
+
+## Troubleshooting
+
+**Audit logs not appearing:**
+
+```sql
+-- Verify pgaudit extension is installed
+SELECT * FROM pg_extension WHERE extname = 'pgaudit';
+
+-- Check pgaudit configuration
+SHOW pgaudit.log;
+SHOW pgaudit.log_parameter;
+```
+
+**Excessive log volume:**
+
+```sql
+-- Reduce audit scope
+SET pgaudit.log = 'DDL,WRITE';  -- Instead of 'ALL'
+SET pgaudit.log_catalog = off;
+SET pgaudit.log_statement_once = on;
+```
+
+**Cannot parse audit logs:**
+
+- Verify log_line_prefix format matches your parser
+- Check for multi-line statements in logs
+- Use pgaudit.log_statement_once to simplify parsing
+
+**Missing user information:**
+
+- Ensure log_line_prefix includes `%u` (username) and `%d` (database)
+- Check that application is authenticating properly

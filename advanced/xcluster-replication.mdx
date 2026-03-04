@@ -1,0 +1,452 @@
+---
+title: 'xCluster Replication'
+description: 'Asynchronous replication between independent YugabyteDB universes for disaster recovery and multi-region deployments'
+---
+
+xCluster replication enables high-throughput asynchronous physical replication between independent YugabyteDB universes. It provides disaster recovery, multi-region active-active deployments, and low-latency writes without requiring synchronous consensus across regions.
+
+## Architecture
+
+xCluster replicates Write-Ahead Log (WAL) records from source universe tablets to target universe tablets using a polling-based architecture:
+
+- **Source Universe**: Produces WAL records as transactions commit
+- **Target Universe**: Contains pollers that request WAL changes from source tablets
+- **CDC Streams**: Track replication progress using the `cdc_state` table
+- **Pollers**: Independent processes in the target universe that poll source tablets
+
+### Replication Flow
+
+```
+Source Universe                    Target Universe
+┌──────────────┐                  ┌──────────────┐
+│  Tablet 1    │◄─────poll────────│   Poller 1   │
+│  (Leader)    │──────changes────►│              │
+│  WAL: OpId N │                  │  Writes to   │
+└──────────────┘                  │  Tablet(s)   │
+                                  └──────────────┘
+        │                                 │
+        │                                 │
+   ┌────▼─────┐                    ┌─────▼────┐
+   │cdc_state │                    │checkpoint│
+   │ table    │                    │tracking  │
+   └──────────┘                    └──────────┘
+```
+
+1. Target pollers request changes starting from the last confirmed OpId
+2. Source tablets return batches of WAL records
+3. Pollers apply changes to target tablets with preserved commit times
+4. Progress is checkpointed in `cdc_state` on the source
+
+## Replication Modes
+
+### Non-Transactional Replication
+
+**Use Case**: Active-active multi-master deployments, low-latency reads
+
+**Characteristics**:
+- Writes allowed on both universes
+- Last-writer-wins conflict resolution (by hybrid timestamp)
+- Eventual consistency; may serve stale or torn reads
+- Supports bidirectional replication
+
+**Limitations**:
+- Torn transactions possible during failover
+- Index corruption risk with concurrent writes to same row
+- Foreign key and unique constraints not guaranteed
+- No automatic conflict resolution
+
+```yaml
+# Non-transactional setup
+Replication Type: Bidirectional
+Write Mode: Multi-master
+Consistency: Eventual
+Conflict Resolution: Last Writer Wins
+```
+
+### Transactional Replication
+
+**Use Case**: Disaster recovery, active-standby deployments, consistent read replicas
+
+**Characteristics**:
+- Target universe is read-only
+- Reads at "xCluster safe time" ensure atomicity
+- Source transactions become visible atomically
+- Point-in-Time Recovery (PITR) for failover
+
+**xCluster Safe Time**: The target reads as of a time sufficiently in the past that all source transactions committed before that time have been fully replicated. Lags real-time by the current replication lag (typically 1-2 seconds).
+
+```yaml
+# Transactional setup  
+Replication Type: Unidirectional
+Write Mode: Source only
+Consistency: Read-your-writes at safe time
+Failover: PITR to latest safe time
+```
+
+#### Transactional Modes
+
+1. **Automatic Mode** (Recommended)
+   - Automatic schema change replication
+   - Simplest operational model
+   - Supports most DDL operations
+
+2. **Semi-Automatic Mode**  
+   - Database-scoped replication
+   - Manual DDL coordination required
+   - Fewer setup steps than manual mode
+
+3. **Manual Mode** (Deprecated)
+   - Table-level replication
+   - Complex manual schema management
+   - Not recommended for new deployments
+
+## Deployment Topologies
+
+### Active-Standby (Disaster Recovery)
+
+```
+  Primary Universe (us-west)        Standby Universe (us-east)
+  ┌──────────────────┐              ┌──────────────────┐
+  │   Read + Write   │─────────────►│    Read Only     │
+  │   Cluster        │  xCluster    │    Cluster       │
+  │                  │  (Txn Mode)  │                  │
+  └──────────────────┘              └──────────────────┘
+        │ writes                           │ reads
+        │                                  │
+   Application                        Analytics/DR
+```
+
+**Configuration**:
+- Transactional mode for consistency
+- PITR enabled for clean failover
+- Monitor replication lag
+- Regular failover drills
+
+### Active-Active Multi-Master
+
+```
+  Universe A (us-west)              Universe B (us-east)
+  ┌──────────────────┐              ┌──────────────────┐
+  │   Read + Write   │◄────────────►│   Read + Write   │
+  │   Cluster        │  Bidirectional│   Cluster       │
+  │                  │  xCluster    │                  │
+  └──────────────────┘              └──────────────────┘
+        │ writes                           │ writes
+        │                                  │
+   West Users                         East Users
+```
+
+**Configuration**:
+- Non-transactional mode
+- Two unidirectional replication flows
+- Conflict resolution: last writer wins
+- Application must handle eventual consistency
+
+<Warning>
+Active-active can lead to data inconsistencies. Carefully partition data or use application-level conflict resolution. Not recommended for YSQL.
+</Warning>
+
+## Setup and Configuration
+
+### Prerequisites
+
+1. **Source and Target Universes**: Both must be running and accessible
+2. **Network Connectivity**: Target must reach source tablet servers
+3. **Matching Schema**: Tables must have identical schema (automatic mode handles this)
+4. **Sufficient Resources**: Target needs capacity for replication workload
+
+### Bootstrapping Replication
+
+For existing source universe with data:
+
+```bash
+# Step 1: Create checkpoint on source
+yb-admin -master_addresses <source_masters> \
+  bootstrap_cdc_producer <namespace_id>
+
+# Step 2: Backup source universe
+yb-admin -master_addresses <source_masters> \
+  create_snapshot <namespace_id> <table_id>
+
+# Step 3: Restore to target universe  
+yb-admin -master_addresses <target_masters> \
+  restore_snapshot <snapshot_id> <namespace_id>
+
+# Step 4: Setup xCluster replication
+yb-admin -master_addresses <target_masters> \
+  setup_universe_replication <source_universe_id> \
+  <source_masters> <table_ids>
+```
+
+### Using YugabyteDB Anywhere (Platform)
+
+YugabyteDB Anywhere provides GUI-based xCluster management:
+
+1. **Navigate to Replication**:
+   - Select source universe
+   - Click "Configure Replication"
+
+2. **Configure Target**:
+   - Enter target universe UUID and master addresses
+   - Select databases/tables to replicate
+   - Set log retention duration
+
+3. **Bootstrap** (if needed):
+   - Platform automatically handles backup/restore
+   - Checkpoints source before data copy
+   - Sets up replication streams
+
+4. **Monitor**:
+   - View replication lag per table
+   - Track source-target relationships
+   - Configure alerting thresholds
+
+### CLI Configuration
+
+```bash
+# Setup replication from source to target
+yb-admin -master_addresses <target_masters> \
+  setup_universe_replication \
+    <source_universe_id> \
+    <source_master_addresses> \
+    <comma_separated_table_ids>
+
+# Check replication status
+yb-admin -master_addresses <target_masters> \
+  get_universe_replication_info
+
+# Pause replication  
+yb-admin -master_addresses <target_masters> \
+  pause_universe_replication <source_universe_id>
+
+# Resume replication
+yb-admin -master_addresses <target_masters> \
+  resume_universe_replication <source_universe_id>
+
+# Delete replication
+yb-admin -master_addresses <target_masters> \
+  delete_universe_replication <source_universe_id>
+```
+
+## Transaction Handling
+
+### Single-Shard Transactions
+
+Commit generates a single WAL record containing all writes:
+
+1. Poller receives batched WAL record
+2. Examines each write to determine target tablet
+3. Forwards writes to appropriate target tablets
+4. Preserves commit timestamp
+5. Marks as external (prevents re-replication)
+
+### Distributed Transactions
+
+Multi-tablet transactions involve:
+
+1. **Intent Records**: Provisional writes on each tablet (WAL records)
+2. **Transaction Status**: Tracked on transaction status tablet
+3. **Commit**: Updates status tablet (generates WAL record)
+4. **Apply**: Asynchronously applies intents to tablets (generates apply WAL records)
+
+Replication:
+- Target creates inert provisional records (no locking)
+- Apply WAL record distributed to all pollers managing relevant tablets
+- Transaction becomes visible when apply completes on each target tablet
+- **Non-transactional mode**: Tablets apply independently (torn reads possible)
+- **Transactional mode**: Reads wait for xCluster safe time
+
+### xCluster Safe Time Calculation
+
+```python
+# Pseudo-code
+xcluster_safe_time(database) = 
+  min(tablet.xcluster_apply_safe_time 
+      for tablet in database.tablets)
+
+# Each tablet's apply safe time ensures:
+# - All transactions committed before this time are fully applied
+# - Source generates apply WAL records every 250ms
+# - Advances even with long-running transactions
+```
+
+## Poller Distribution
+
+Target tablets may need changes from multiple source tablets (and vice versa) due to:
+- Different tablet counts between universes
+- Tablet splits occurring at different times
+- Different sharding boundaries
+
+**Optimization**: One poller per source tablet prevents redundant cross-universe reads. When multiple target tablets need data from the same source tablet, one poller distributes changes to all relevant targets.
+
+```
+Source (3 tablets)              Target (2 tablets)
+┌────────────┐                  ┌────────────┐
+│ Tablet A   │◄────Poller 1────►│ Tablet X   │
+│ Range: A-M │                  │ Range: A-P │
+└────────────┘                  └────────────┘
+┌────────────┐                        │
+│ Tablet B   │◄────Poller 2───────────┤
+│ Range: N-T │                  ┌────────────┐
+└────────────┘                  │ Tablet Y   │
+┌────────────┐                  │ Range: Q-Z │
+│ Tablet C   │◄────Poller 2────►│            │
+│ Range: U-Z │                  └────────────┘
+└────────────┘
+```
+
+Tablet splits are replicated via WAL, automatically updating poller mappings.
+
+## Schema Changes
+
+### Automatic Mode
+
+DDL changes automatically replicate to target:
+
+```sql
+-- Source: Execute DDL normally
+ALTER TABLE users ADD COLUMN phone VARCHAR(20);
+
+-- Target: Change automatically applied
+-- No manual intervention needed
+```
+
+### Semi-Automatic and Manual Modes
+
+Manual DDL coordination required:
+
+1. **Pause replication** (if necessary)
+2. **Apply DDL to source** universe
+3. **Apply DDL to target** universe (same schema)
+4. **Resume replication**
+
+Replication auto-pauses when schema divergence detected and resumes when schemas match.
+
+**Unsupported DDLs**:
+- Table rewrites (requires drop and re-setup)
+- `TRUNCATE`
+- `CREATE TABLE AS` / `SELECT INTO`
+
+## Monitoring and Alerting
+
+### Key Metrics
+
+```sql
+-- Replication lag (ms)
+SELECT table_id, 
+       consumer_registry_tablet_lag_ms
+FROM cdc_state;
+
+-- Poller status
+SELECT table_id,
+       stream_state,
+       checkpoint_op_id
+FROM cdc_state;
+```
+
+### Platform Monitoring
+
+- **Lag Dashboard**: Table-level replication lag
+- **Universe Health**: Replication flow status  
+- **Alerts**: Configure thresholds for:
+  - Replication lag exceeding SLA
+  - Replication errors
+  - Schema drift detection
+
+### Log Retention
+
+Configure WAL retention to handle target downtime:
+
+```bash
+# Set WAL retention hours
+yb-admin -master_addresses <source_masters> \
+  set_wal_retention_secs <table_id> <seconds>
+```
+
+## Failover and Recovery
+
+### Planned Failover (Transactional Mode)
+
+1. **Stop writes** to source universe
+2. **Wait for replication** to catch up (lag = 0)
+3. **Verify xCluster safe time** advanced to recent timestamp
+4. **Switch application** to target universe
+5. **(Optional) Reverse replication** direction
+
+### Unplanned Failover (Disaster Recovery)
+
+**Transactional Mode**:
+1. **Rewind target** to latest xCluster safe time using PITR
+2. **Promote target** to primary
+3. **Reconfigure application** endpoints
+4. **Assess data loss**: Maximum = replication lag at failure time
+
+**Non-Transactional Mode**:
+1. **Promote target** to primary
+2. **Manual reconciliation** of torn transactions
+3. **Verify data consistency** (indexes, constraints)
+
+### Reversing Replication
+
+After failover, reverse the replication direction:
+
+```bash
+# Setup reverse replication: old-target → old-source
+yb-admin -master_addresses <old_source_masters> \
+  setup_universe_replication <old_target_id> ...
+```
+
+## Best Practices
+
+1. **Choose the Right Mode**:
+   - Transactional for DR and read replicas
+   - Non-transactional only for YCQL active-active
+
+2. **Monitor Replication Lag**:
+   - Set alerts for lag > 5 seconds
+   - Investigate sustained lag immediately
+
+3. **Test Failover Procedures**:
+   - Regular DR drills
+   - Verify PITR recovery points
+   - Document runbooks
+
+4. **Schema Management**:
+   - Use automatic mode for new deployments
+   - Test DDLs in staging first
+   - Coordinate changes during low traffic
+
+5. **Network Configuration**:
+   - Direct pod/node communication in Kubernetes
+   - Dedicated network for replication traffic
+   - Monitor network latency
+
+6. **Capacity Planning**:
+   - Target needs resources for replication workload
+   - WAL retention requires additional storage
+   - Poller count scales with tablet count
+
+## Limitations
+
+### General
+- Broadcast topology (A → B, A → C): Not supported
+- Consolidation (B → A, C → A): Not supported  
+- Daisy chaining (A → B → C): Not supported
+- Star topology (A ↔ B ↔ C): Not supported
+
+### YSQL Specific
+- Array types with row/domain/multi-range base types
+- Table columns with row types
+- pgvector indexes
+- Materialized views (semi-automatic/manual modes)
+- Sequences (semi-automatic/manual modes)
+
+### Kubernetes
+- Requires direct pod-to-pod communication
+- Load balancer communication not supported
+
+## Learn More
+
+- [xCluster Architecture](/architecture/docdb-replication/async-replication)
+- [Platform xCluster Management](/yugabyte-platform/manage-deployments/xcluster-replication)
+- [Transactional xCluster](/deploy/multi-dc/async-replication/async-transactional)

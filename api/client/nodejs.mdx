@@ -1,0 +1,576 @@
+---
+title: Node.js Client Driver
+description: Connect to YugabyteDB using Node.js with node-postgres (pg) driver
+---
+
+The node-postgres (pg) driver is the most popular PostgreSQL client for Node.js. YugabyteDB is fully compatible with node-postgres, allowing you to build scalable Node.js applications with YugabyteDB's distributed SQL capabilities.
+
+## Installation
+
+<CodeGroup>
+
+```bash npm
+npm install pg
+```
+
+```bash yarn
+yarn add pg
+```
+
+```bash pnpm
+pnpm add pg
+```
+
+</CodeGroup>
+
+## Quick Start
+
+### Basic Connection
+
+```javascript
+const { Client } = require('pg');
+
+const client = new Client({
+  host: 'localhost',
+  port: 5433,
+  database: 'yugabyte',
+  user: 'yugabyte',
+  password: 'yugabyte'
+});
+
+client.connect()
+  .then(() => console.log('Connected to YugabyteDB'))
+  .then(() => client.query('SELECT version()'))
+  .then(result => console.log('Version:', result.rows[0]))
+  .catch(err => console.error('Connection error', err))
+  .finally(() => client.end());
+```
+
+### Using Async/Await
+
+```javascript
+const { Client } = require('pg');
+
+async function queryDatabase() {
+  const client = new Client({
+    host: 'localhost',
+    port: 5433,
+    database: 'yugabyte',
+    user: 'yugabyte',
+    password: 'yugabyte'
+  });
+
+  try {
+    await client.connect();
+    
+    const result = await client.query(
+      'SELECT name, email FROM users WHERE id = $1',
+      [1]
+    );
+    
+    console.log('User:', result.rows[0]);
+  } catch (err) {
+    console.error('Database error:', err);
+  } finally {
+    await client.end();
+  }
+}
+
+queryDatabase();
+```
+
+## Connection Configuration
+
+### Connection String
+
+<CodeGroup>
+
+```javascript Connection String
+const { Client } = require('pg');
+
+const client = new Client(
+  'postgresql://yugabyte:yugabyte@localhost:5433/yugabyte'
+);
+```
+
+```javascript Environment Variable
+// Set environment variable
+// DATABASE_URL=postgresql://yugabyte:yugabyte@localhost:5433/yugabyte
+
+const { Client } = require('pg');
+const client = new Client(); // Uses DATABASE_URL by default
+```
+
+```javascript Configuration Object
+const { Client } = require('pg');
+
+const client = new Client({
+  host: 'localhost',
+  port: 5433,
+  database: 'yugabyte',
+  user: 'yugabyte',
+  password: 'yugabyte',
+  connectionTimeoutMillis: 5000,
+  query_timeout: 10000,
+  statement_timeout: 10000
+});
+```
+
+</CodeGroup>
+
+### SSL/TLS Configuration
+
+```javascript
+const { Client } = require('pg');
+const fs = require('fs');
+
+const client = new Client({
+  host: 'your-cluster.yugabyte.cloud',
+  port: 5433,
+  database: 'yugabyte',
+  user: 'admin',
+  password: 'your-password',
+  ssl: {
+    rejectUnauthorized: true,
+    ca: fs.readFileSync('/path/to/root.crt').toString()
+  }
+});
+```
+
+#### SSL Options
+
+<CodeGroup>
+
+```javascript Require SSL (no verification)
+const client = new Client({
+  host: 'localhost',
+  port: 5433,
+  database: 'yugabyte',
+  user: 'yugabyte',
+  password: 'yugabyte',
+  ssl: {
+    rejectUnauthorized: false
+  }
+});
+```
+
+```javascript Verify CA Certificate
+const fs = require('fs');
+
+const client = new Client({
+  host: 'localhost',
+  port: 5433,
+  database: 'yugabyte',
+  user: 'yugabyte',
+  password: 'yugabyte',
+  ssl: {
+    rejectUnauthorized: true,
+    ca: fs.readFileSync('/path/to/root.crt').toString()
+  }
+});
+```
+
+```javascript Client Certificates
+const client = new Client({
+  host: 'localhost',
+  port: 5433,
+  database: 'yugabyte',
+  user: 'yugabyte',
+  password: 'yugabyte',
+  ssl: {
+    rejectUnauthorized: true,
+    ca: fs.readFileSync('/path/to/root.crt').toString(),
+    key: fs.readFileSync('/path/to/client-key.pem').toString(),
+    cert: fs.readFileSync('/path/to/client-cert.pem').toString()
+  }
+});
+```
+
+</CodeGroup>
+
+## Connection Pooling
+
+### Basic Pool
+
+```javascript
+const { Pool } = require('pg');
+
+const pool = new Pool({
+  host: 'localhost',
+  port: 5433,
+  database: 'yugabyte',
+  user: 'yugabyte',
+  password: 'yugabyte',
+  max: 20,                    // Maximum pool size
+  min: 5,                     // Minimum pool size
+  idleTimeoutMillis: 30000,   // Close idle clients after 30s
+  connectionTimeoutMillis: 2000 // Return error after 2s if no connection available
+});
+
+// Query directly on pool
+pool.query('SELECT * FROM users', (err, result) => {
+  if (err) {
+    console.error('Query error', err);
+  } else {
+    console.log('Users:', result.rows);
+  }
+});
+
+// Shutdown pool
+pool.end();
+```
+
+### Pool with Async/Await
+
+```javascript
+const { Pool } = require('pg');
+
+const pool = new Pool({
+  host: 'localhost',
+  port: 5433,
+  database: 'yugabyte',
+  user: 'yugabyte',
+  password: 'yugabyte',
+  max: 20
+});
+
+async function getUser(userId) {
+  const result = await pool.query(
+    'SELECT * FROM users WHERE id = $1',
+    [userId]
+  );
+  return result.rows[0];
+}
+
+async function createUser(name, email) {
+  const result = await pool.query(
+    'INSERT INTO users (name, email) VALUES ($1, $2) RETURNING *',
+    [name, email]
+  );
+  return result.rows[0];
+}
+
+// Use the functions
+(async () => {
+  try {
+    const user = await getUser(1);
+    console.log('User:', user);
+    
+    const newUser = await createUser('Alice', 'alice@example.com');
+    console.log('Created:', newUser);
+  } catch (err) {
+    console.error('Error:', err);
+  }
+})();
+```
+
+### Pool Client Checkout
+
+```javascript
+const { Pool } = require('pg');
+
+const pool = new Pool({
+  host: 'localhost',
+  port: 5433,
+  database: 'yugabyte',
+  user: 'yugabyte',
+  password: 'yugabyte'
+});
+
+async function performTransaction() {
+  // Checkout a client from the pool
+  const client = await pool.connect();
+  
+  try {
+    await client.query('BEGIN');
+    
+    await client.query(
+      'INSERT INTO accounts (name, balance) VALUES ($1, $2)',
+      ['Alice', 1000]
+    );
+    
+    await client.query(
+      'INSERT INTO transactions (account, amount) VALUES ($1, $2)',
+      ['Alice', 1000]
+    );
+    
+    await client.query('COMMIT');
+    console.log('Transaction completed');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Transaction failed:', err);
+    throw err;
+  } finally {
+    // Release client back to pool
+    client.release();
+  }
+}
+```
+
+## CRUD Operations
+
+### Create (Insert)
+
+```javascript
+// Single insert
+const result = await pool.query(
+  'INSERT INTO users (name, email, age) VALUES ($1, $2, $3) RETURNING *',
+  ['John Doe', 'john@example.com', 30]
+);
+console.log('Created user:', result.rows[0]);
+
+// Bulk insert
+const users = [
+  ['Alice', 'alice@example.com', 25],
+  ['Bob', 'bob@example.com', 35],
+  ['Charlie', 'charlie@example.com', 28]
+];
+
+for (const user of users) {
+  await pool.query(
+    'INSERT INTO users (name, email, age) VALUES ($1, $2, $3)',
+    user
+  );
+}
+```
+
+### Read (Select)
+
+```javascript
+// Select one
+const { rows } = await pool.query(
+  'SELECT * FROM users WHERE id = $1',
+  [1]
+);
+const user = rows[0];
+
+// Select many with conditions
+const { rows: activeUsers } = await pool.query(
+  'SELECT * FROM users WHERE age > $1 AND status = $2',
+  [25, 'active']
+);
+
+// Select all
+const { rows: allUsers } = await pool.query('SELECT * FROM users');
+
+// Select with pagination
+const { rows: page } = await pool.query(
+  'SELECT * FROM users ORDER BY created_at DESC LIMIT $1 OFFSET $2',
+  [10, 20] // 10 items per page, starting at page 3
+);
+```
+
+### Update
+
+```javascript
+// Update single record
+const result = await pool.query(
+  'UPDATE users SET age = $1 WHERE id = $2 RETURNING *',
+  [31, 1]
+);
+console.log('Updated:', result.rows[0]);
+
+// Update multiple records
+const { rowCount } = await pool.query(
+  'UPDATE users SET status = $1 WHERE age > $2',
+  ['senior', 50]
+);
+console.log(`Updated ${rowCount} rows`);
+```
+
+### Delete
+
+```javascript
+// Delete specific record
+const result = await pool.query(
+  'DELETE FROM users WHERE id = $1 RETURNING *',
+  [1]
+);
+console.log('Deleted:', result.rows[0]);
+
+// Delete with condition
+const { rowCount } = await pool.query(
+  'DELETE FROM users WHERE age < $1',
+  [18]
+);
+console.log(`Deleted ${rowCount} rows`);
+```
+
+## Transaction Management
+
+### Basic Transaction
+
+```javascript
+const client = await pool.connect();
+
+try {
+  await client.query('BEGIN');
+  
+  await client.query(
+    'UPDATE accounts SET balance = balance - $1 WHERE id = $2',
+    [100, 1]
+  );
+  
+  await client.query(
+    'UPDATE accounts SET balance = balance + $1 WHERE id = $2',
+    [100, 2]
+  );
+  
+  await client.query('COMMIT');
+  console.log('Transaction successful');
+} catch (err) {
+  await client.query('ROLLBACK');
+  console.error('Transaction failed:', err);
+  throw err;
+} finally {
+  client.release();
+}
+```
+
+### Transaction Helper
+
+```javascript
+async function withTransaction(pool, callback) {
+  const client = await pool.connect();
+  
+  try {
+    await client.query('BEGIN');
+    const result = await callback(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+// Usage
+await withTransaction(pool, async (client) => {
+  await client.query(
+    'INSERT INTO orders (user_id, total) VALUES ($1, $2)',
+    [userId, total]
+  );
+  
+  await client.query(
+    'UPDATE inventory SET quantity = quantity - $1 WHERE product_id = $2',
+    [quantity, productId]
+  );
+});
+```
+
+## Best Practices
+
+### Parameterized Queries
+
+Always use parameterized queries to prevent SQL injection:
+
+```javascript
+// ✅ Good - Parameterized
+const result = await pool.query(
+  'SELECT * FROM users WHERE email = $1',
+  [userEmail]
+);
+
+// ❌ Bad - String interpolation (SQL injection risk)
+const result = await pool.query(
+  `SELECT * FROM users WHERE email = '${userEmail}'`
+);
+```
+
+### Error Handling
+
+```javascript
+const { Pool } = require('pg');
+
+const pool = new Pool({
+  host: 'localhost',
+  port: 5433,
+  database: 'yugabyte',
+  user: 'yugabyte',
+  password: 'yugabyte'
+});
+
+// Pool error handler
+pool.on('error', (err, client) => {
+  console.error('Unexpected pool error:', err);
+});
+
+async function safeQuery() {
+  try {
+    const result = await pool.query('SELECT * FROM users');
+    return result.rows;
+  } catch (err) {
+    if (err.code === '42P01') {
+      console.error('Table does not exist');
+    } else if (err.code === '23505') {
+      console.error('Unique constraint violation');
+    } else {
+      console.error('Database error:', err.message);
+    }
+    throw err;
+  }
+}
+```
+
+### Pool Shutdown
+
+```javascript
+const pool = new Pool({ /* config */ });
+
+// Graceful shutdown
+process.on('SIGTERM', async () => {
+  console.log('Closing database pool...');
+  await pool.end();
+  console.log('Pool closed');
+  process.exit(0);
+});
+```
+
+## TypeScript Support
+
+```typescript
+import { Pool, QueryResult } from 'pg';
+
+interface User {
+  id: number;
+  name: string;
+  email: string;
+  age: number;
+}
+
+const pool = new Pool({
+  host: 'localhost',
+  port: 5433,
+  database: 'yugabyte',
+  user: 'yugabyte',
+  password: 'yugabyte'
+});
+
+async function getUser(id: number): Promise<User | null> {
+  const result: QueryResult<User> = await pool.query(
+    'SELECT * FROM users WHERE id = $1',
+    [id]
+  );
+  return result.rows[0] || null;
+}
+
+async function createUser(
+  name: string,
+  email: string,
+  age: number
+): Promise<User> {
+  const result: QueryResult<User> = await pool.query(
+    'INSERT INTO users (name, email, age) VALUES ($1, $2, $3) RETURNING *',
+    [name, email, age]
+  );
+  return result.rows[0];
+}
+```
+
+## Additional Resources
+
+- [node-postgres Documentation](https://node-postgres.com/)
+- [Node.js Drivers Overview](/drivers-orms/nodejs/)
+- [YugabyteDB Node.js Examples](https://github.com/yugabyte/yugabyte-simple-node-app)

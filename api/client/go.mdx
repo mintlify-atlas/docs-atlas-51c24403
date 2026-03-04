@@ -1,0 +1,572 @@
+---
+title: Go Client Driver
+description: Connect to YugabyteDB using Go with pgx and database/sql drivers
+---
+
+Go applications can connect to YugabyteDB using the pgx driver (recommended) or the standard database/sql package with the lib/pq driver. YugabyteDB provides a smart driver extension for pgx that offers advanced features like topology-aware load balancing.
+
+## Installation
+
+<CodeGroup>
+
+```bash pgx v4 (Recommended)
+go get github.com/yugabyte/pgx/v4
+```
+
+```bash pgx v5
+go get github.com/jackc/pgx/v5
+```
+
+```bash lib/pq
+go get github.com/lib/pq
+```
+
+</CodeGroup>
+
+## Quick Start
+
+### Using pgx (Recommended)
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+    
+    "github.com/jackc/pgx/v4"
+)
+
+func main() {
+    // Connection string
+    connString := "postgresql://yugabyte:yugabyte@localhost:5433/yugabyte"
+    
+    // Connect to database
+    conn, err := pgx.Connect(context.Background(), connString)
+    if err != nil {
+        log.Fatalf("Unable to connect to database: %v\n", err)
+    }
+    defer conn.Close(context.Background())
+    
+    // Query database
+    var version string
+    err = conn.QueryRow(context.Background(), "SELECT version()").Scan(&version)
+    if err != nil {
+        log.Fatalf("Query failed: %v\n", err)
+    }
+    
+    fmt.Printf("Database version: %s\n", version)
+}
+```
+
+### Using database/sql with lib/pq
+
+```go
+package main
+
+import (
+    "database/sql"
+    "fmt"
+    "log"
+    
+    _ "github.com/lib/pq"
+)
+
+func main() {
+    connStr := "host=localhost port=5433 user=yugabyte password=yugabyte dbname=yugabyte sslmode=disable"
+    
+    db, err := sql.Open("postgres", connStr)
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer db.Close()
+    
+    // Test connection
+    err = db.Ping()
+    if err != nil {
+        log.Fatal(err)
+    }
+    
+    var version string
+    err = db.QueryRow("SELECT version()").Scan(&version)
+    if err != nil {
+        log.Fatal(err)
+    }
+    
+    fmt.Printf("Database version: %s\n", version)
+}
+```
+
+## Connection Configuration
+
+### pgx Connection String
+
+<CodeGroup>
+
+```go Connection String
+connString := "postgresql://yugabyte:yugabyte@localhost:5433/yugabyte?sslmode=disable"
+conn, err := pgx.Connect(context.Background(), connString)
+```
+
+```go Connection Config
+config, err := pgx.ParseConfig("postgresql://yugabyte:yugabyte@localhost:5433/yugabyte")
+if err != nil {
+    log.Fatal(err)
+}
+
+// Customize config
+config.ConnectTimeout = 10 * time.Second
+config.RuntimeParams = map[string]string{
+    "application_name": "myapp",
+}
+
+conn, err := pgx.ConnectConfig(context.Background(), config)
+```
+
+```go Manual Config
+import (
+    "github.com/jackc/pgx/v4"
+)
+
+config := &pgx.ConnConfig{
+    Host:     "localhost",
+    Port:     5433,
+    Database: "yugabyte",
+    User:     "yugabyte",
+    Password: "yugabyte",
+}
+
+conn, err := pgx.ConnectConfig(context.Background(), config)
+```
+
+</CodeGroup>
+
+### SSL/TLS Configuration
+
+```go
+import (
+    "crypto/tls"
+    "crypto/x509"
+    "io/ioutil"
+    
+    "github.com/jackc/pgx/v4"
+)
+
+// Load CA certificate
+caCert, err := ioutil.ReadFile("/path/to/root.crt")
+if err != nil {
+    log.Fatal(err)
+}
+
+caCertPool := x509.NewCertPool()
+caCertPool.AppendCertsFromPEM(caCert)
+
+// Configure TLS
+tlsConfig := &tls.Config{
+    RootCAs:            caCertPool,
+    InsecureSkipVerify: false,
+}
+
+config, err := pgx.ParseConfig(
+    "postgresql://yugabyte:yugabyte@localhost:5433/yugabyte?sslmode=verify-full"
+)
+if err != nil {
+    log.Fatal(err)
+}
+
+config.TLSConfig = tlsConfig
+conn, err := pgx.ConnectConfig(context.Background(), config)
+```
+
+## Connection Pooling
+
+### pgxpool
+
+```go
+import (
+    "context"
+    "fmt"
+    "log"
+    
+    "github.com/jackc/pgx/v4/pgxpool"
+)
+
+func main() {
+    // Create connection pool
+    poolConfig, err := pgxpool.ParseConfig(
+        "postgresql://yugabyte:yugabyte@localhost:5433/yugabyte"
+    )
+    if err != nil {
+        log.Fatal(err)
+    }
+    
+    // Configure pool settings
+    poolConfig.MaxConns = 20
+    poolConfig.MinConns = 5
+    poolConfig.MaxConnLifetime = 1 * time.Hour
+    poolConfig.MaxConnIdleTime = 30 * time.Minute
+    
+    pool, err := pgxpool.ConnectConfig(context.Background(), poolConfig)
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer pool.Close()
+    
+    // Use pool for queries
+    var count int
+    err = pool.QueryRow(context.Background(), "SELECT COUNT(*) FROM users").Scan(&count)
+    if err != nil {
+        log.Fatal(err)
+    }
+    
+    fmt.Printf("Total users: %d\n", count)
+}
+```
+
+### database/sql Connection Pool
+
+```go
+import (
+    "database/sql"
+    "time"
+    
+    _ "github.com/lib/pq"
+)
+
+func main() {
+    connStr := "host=localhost port=5433 user=yugabyte password=yugabyte dbname=yugabyte sslmode=disable"
+    db, err := sql.Open("postgres", connStr)
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer db.Close()
+    
+    // Configure connection pool
+    db.SetMaxOpenConns(25)
+    db.SetMaxIdleConns(5)
+    db.SetConnMaxLifetime(1 * time.Hour)
+    db.SetConnMaxIdleTime(10 * time.Minute)
+    
+    // Test connection
+    err = db.Ping()
+    if err != nil {
+        log.Fatal(err)
+    }
+}
+```
+
+## CRUD Operations
+
+### Create (Insert)
+
+```go
+// Single insert
+var id int
+var name string
+err := pool.QueryRow(
+    context.Background(),
+    "INSERT INTO users (name, email, age) VALUES ($1, $2, $3) RETURNING id, name",
+    "John Doe", "john@example.com", 30,
+).Scan(&id, &name)
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Printf("Created user %s with ID %d\n", name, id)
+
+// Bulk insert
+batch := &pgx.Batch{}
+for i := 0; i < 100; i++ {
+    batch.Queue(
+        "INSERT INTO users (name, email, age) VALUES ($1, $2, $3)",
+        fmt.Sprintf("User%d", i),
+        fmt.Sprintf("user%d@example.com", i),
+        20+i,
+    )
+}
+
+br := pool.SendBatch(context.Background(), batch)
+defer br.Close()
+
+for i := 0; i < 100; i++ {
+    _, err := br.Exec()
+    if err != nil {
+        log.Fatal(err)
+    }
+}
+```
+
+### Read (Select)
+
+```go
+// Query single row
+type User struct {
+    ID    int
+    Name  string
+    Email string
+    Age   int
+}
+
+var user User
+err := pool.QueryRow(
+    context.Background(),
+    "SELECT id, name, email, age FROM users WHERE id = $1",
+    1,
+).Scan(&user.ID, &user.Name, &user.Email, &user.Age)
+if err != nil {
+    log.Fatal(err)
+}
+
+// Query multiple rows
+rows, err := pool.Query(
+    context.Background(),
+    "SELECT id, name, email, age FROM users WHERE age > $1",
+    25,
+)
+if err != nil {
+    log.Fatal(err)
+}
+defer rows.Close()
+
+var users []User
+for rows.Next() {
+    var u User
+    err := rows.Scan(&u.ID, &u.Name, &u.Email, &u.Age)
+    if err != nil {
+        log.Fatal(err)
+    }
+    users = append(users, u)
+}
+
+if rows.Err() != nil {
+    log.Fatal(rows.Err())
+}
+```
+
+### Update
+
+```go
+// Update single record
+commandTag, err := pool.Exec(
+    context.Background(),
+    "UPDATE users SET age = $1 WHERE id = $2",
+    31, 1,
+)
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Printf("Updated %d rows\n", commandTag.RowsAffected())
+
+// Update with RETURNING
+var updatedName string
+err = pool.QueryRow(
+    context.Background(),
+    "UPDATE users SET age = $1 WHERE id = $2 RETURNING name",
+    32, 1,
+).Scan(&updatedName)
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+### Delete
+
+```go
+// Delete record
+commandTag, err := pool.Exec(
+    context.Background(),
+    "DELETE FROM users WHERE id = $1",
+    1,
+)
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Printf("Deleted %d rows\n", commandTag.RowsAffected())
+```
+
+## Transaction Management
+
+### pgx Transactions
+
+```go
+import (
+    "context"
+    "github.com/jackc/pgx/v4"
+)
+
+func transferMoney(pool *pgxpool.Pool, fromID, toID int, amount int) error {
+    ctx := context.Background()
+    
+    // Begin transaction
+    tx, err := pool.Begin(ctx)
+    if err != nil {
+        return err
+    }
+    defer tx.Rollback(ctx) // Rollback if not committed
+    
+    // Debit from account
+    _, err = tx.Exec(
+        ctx,
+        "UPDATE accounts SET balance = balance - $1 WHERE id = $2",
+        amount, fromID,
+    )
+    if err != nil {
+        return err
+    }
+    
+    // Credit to account
+    _, err = tx.Exec(
+        ctx,
+        "UPDATE accounts SET balance = balance + $1 WHERE id = $2",
+        amount, toID,
+    )
+    if err != nil {
+        return err
+    }
+    
+    // Commit transaction
+    return tx.Commit(ctx)
+}
+```
+
+### database/sql Transactions
+
+```go
+func transferMoney(db *sql.DB, fromID, toID int, amount int) error {
+    tx, err := db.Begin()
+    if err != nil {
+        return err
+    }
+    defer tx.Rollback()
+    
+    _, err = tx.Exec(
+        "UPDATE accounts SET balance = balance - $1 WHERE id = $2",
+        amount, fromID,
+    )
+    if err != nil {
+        return err
+    }
+    
+    _, err = tx.Exec(
+        "UPDATE accounts SET balance = balance + $1 WHERE id = $2",
+        amount, toID,
+    )
+    if err != nil {
+        return err
+    }
+    
+    return tx.Commit()
+}
+```
+
+## Best Practices
+
+### Context Usage
+
+Always use context for cancellation and timeouts:
+
+```go
+import (
+    "context"
+    "time"
+)
+
+// Context with timeout
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+defer cancel()
+
+var result string
+err := pool.QueryRow(ctx, "SELECT expensive_query()").Scan(&result)
+if err != nil {
+    if err == context.DeadlineExceeded {
+        log.Println("Query timed out")
+    }
+    log.Fatal(err)
+}
+```
+
+### Error Handling
+
+```go
+import (
+    "errors"
+    "github.com/jackc/pgx/v4"
+)
+
+var user User
+err := pool.QueryRow(
+    context.Background(),
+    "SELECT id, name FROM users WHERE id = $1",
+    999,
+).Scan(&user.ID, &user.Name)
+
+if err != nil {
+    if errors.Is(err, pgx.ErrNoRows) {
+        fmt.Println("User not found")
+    } else {
+        log.Fatal(err)
+    }
+}
+```
+
+### Prepared Statements
+
+```go
+// Prepare statement
+stmt, err := pool.Prepare(
+    context.Background(),
+    "get_user",
+    "SELECT id, name, email FROM users WHERE id = $1",
+)
+if err != nil {
+    log.Fatal(err)
+}
+
+// Use prepared statement
+var user User
+err = pool.QueryRow(
+    context.Background(),
+    "get_user",
+    1,
+).Scan(&user.ID, &user.Name, &user.Email)
+```
+
+### Graceful Shutdown
+
+```go
+import (
+    "os"
+    "os/signal"
+    "syscall"
+)
+
+func main() {
+    pool, err := pgxpool.Connect(
+        context.Background(),
+        "postgresql://yugabyte:yugabyte@localhost:5433/yugabyte",
+    )
+    if err != nil {
+        log.Fatal(err)
+    }
+    
+    // Setup signal handling
+    sigChan := make(chan os.Signal, 1)
+    signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+    
+    go func() {
+        <-sigChan
+        fmt.Println("Shutting down...")
+        pool.Close()
+        os.Exit(0)
+    }()
+    
+    // Application logic
+    // ...
+}
+```
+
+## Additional Resources
+
+- [pgx Documentation](https://pkg.go.dev/github.com/jackc/pgx/v4)
+- [Go Drivers Overview](/drivers-orms/go/)
+- [YugabyteDB Go Examples](https://github.com/yugabyte/yugabyte-simple-go-app)

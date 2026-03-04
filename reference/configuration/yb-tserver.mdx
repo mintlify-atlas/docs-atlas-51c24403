@@ -1,0 +1,522 @@
+---
+title: yb-tserver Configuration
+description: YugabyteDB Tablet Server (yb-tserver) configuration flags and parameters for data storage and processing
+---
+
+The YB-TServer (Tablet Server) is responsible for storing and managing data, processing client requests, and handling replication in a YugabyteDB cluster. Proper configuration is essential for optimizing performance, managing resources, ensuring security, and maintaining high availability.
+
+## Overview
+
+The yb-tserver executable is located in the `bin` directory of your YugabyteDB installation. Each YB-TServer manages tablets (sharded units of storage) and serves both YSQL and YCQL requests.
+
+<Note>
+If you are using YugabyteDB Anywhere, set flags using the **Edit Flags** feature in the platform UI.
+</Note>
+
+## Configuration Categories
+
+| Category | Description |
+|----------|-------------|
+| General Configuration | Basic server setup, logging, and web interface |
+| PostgreSQL Parameters | YSQL-specific configuration parameters |
+| Networking | Network interfaces, RPC endpoints, DNS caching |
+| Storage & Data Management | Data directories, WAL, sharding, CDC, TTL |
+| Performance Tuning | Resource allocation, memory, compaction |
+| Security | Encryption, SSL/TLS, authentication |
+
+## Syntax
+
+```bash
+yb-tserver [flags]
+```
+
+### Example
+
+```bash
+./bin/yb-tserver \
+  --tserver_master_addrs 172.151.17.130:7100,172.151.17.220:7100,172.151.17.140:7100 \
+  --rpc_bind_addresses 172.151.17.130 \
+  --enable_ysql \
+  --fs_data_dirs "/home/centos/disk1,/home/centos/disk2"
+```
+
+### Online Help
+
+To display command-line help:
+
+```bash
+./bin/yb-tserver --help
+```
+
+Use `--helpon` to display help on specific modules:
+
+```bash
+./bin/yb-tserver --helpon=<module_name>
+```
+
+## General Configuration
+
+### Core Flags
+
+<ParamField path="--flagfile" type="string">
+  Specifies the file to load configuration flags from. Flags must be in the same format as command line flags.
+  
+  <Info>Requires restart after modification.</Info>
+</ParamField>
+
+<ParamField path="--version" type="flag">
+  Shows version and build information, then exits.
+</ParamField>
+
+<ParamField path="--tserver_master_addrs" type="string" required>
+  Comma-separated addresses of the masters which the tablet server should connect to. The CQL proxy also reads this flag.
+  
+  **Default:** `127.0.0.1:7100`
+  
+  <Info>This flag is stable and widely used in production.</Info>
+</ParamField>
+
+<ParamField path="--tserver_master_replication_factor" type="uint64">
+  Number of master replicas. By default, detected from `tserver_master_addrs`, but can be specified explicitly for Kubernetes auto-discovery.
+  
+  **Default:** `0` (auto-detect)
+</ParamField>
+
+<ParamField path="--max_clock_skew_usec" type="int64">
+  Expected maximum clock skew in microseconds between any two nodes in the deployment.
+  
+  **Default:** `500000` (500 ms)
+  
+  <Info>Requires restart after modification.</Info>
+</ParamField>
+
+<ParamField path="--tablet_server_svc_queue_length" type="int32">
+  Queue size for the tablet server to serve reads and writes from applications.
+  
+  **Default:** `5000`
+  
+  <Info>Requires restart after modification.</Info>
+</ParamField>
+
+<ParamField path="--time_source" type="string">
+  Time source used by the database. Set to `clockbound` for highly accurate time sources.
+  
+  **Default:** `""`
+  
+  <Warning>
+  Using `clockbound` requires additional system configuration for time synchronization.
+  </Warning>
+</ParamField>
+
+### Web Server Configuration
+
+<ParamField path="--webserver_interface" type="string">
+  Address to bind for the web server user interface.
+  
+  **Default:** `0.0.0.0` (or `127.0.0.1`)
+</ParamField>
+
+<ParamField path="--webserver_port" type="int32">
+  Port for monitoring the web server.
+  
+  **Default:** `9000`
+</ParamField>
+
+<ParamField path="--webserver_doc_root" type="string">
+  Monitoring web server home directory.
+  
+  **Default:** The `www` directory in YugabyteDB home
+</ParamField>
+
+<ParamField path="--webserver_certificate_file" type="string">
+  Location of SSL certificate file (in .pem format) for the web server. If empty, SSL is disabled.
+  
+  **Default:** `""`
+  
+  <Info>Requires restart after modification.</Info>
+</ParamField>
+
+<ParamField path="--webserver_authentication_domain" type="string">
+  Domain used for .htpasswd authentication. Use with `--webserver_password_file`.
+  
+  **Default:** `""`
+  
+  <Info>Requires restart after modification.</Info>
+</ParamField>
+
+<ParamField path="--webserver_password_file" type="string">
+  Location of .htpasswd file containing usernames and hashed passwords for web server authentication.
+  
+  **Default:** `""`
+  
+  <Info>Requires restart after modification.</Info>
+</ParamField>
+
+### Logging Flags
+
+<ParamField path="--log_dir" type="string">
+  Directory to write yb-tserver log files.
+  
+  **Default:** Same as `--fs_data_dirs`
+  
+  <Info>Requires restart after modification.</Info>
+</ParamField>
+
+<ParamField path="--logtostderr" type="boolean">
+  Write log messages to stderr instead of log files.
+  
+  **Default:** `false`
+</ParamField>
+
+<ParamField path="--max_log_size" type="int32">
+  Maximum log size in megabytes. A value of 0 is silently overridden to 1.
+  
+  **Default:** `1800` (1.8 GB)
+</ParamField>
+
+<ParamField path="--minloglevel" type="int32">
+  Minimum level to log messages. Values: 0 (INFO), 1 (WARN), 2 (ERROR), 3 (FATAL).
+  
+  **Default:** `0` (INFO)
+</ParamField>
+
+<ParamField path="--stderrthreshold" type="int32">
+  Log messages at or above this level are copied to stderr in addition to log files.
+  
+  **Default:** `3`
+</ParamField>
+
+<ParamField path="--stop_logging_if_full_disk" type="boolean">
+  Stop attempting to log to disk if the disk is full.
+  
+  **Default:** `false`
+</ParamField>
+
+<ParamField path="--callhome_enabled" type="boolean">
+  Enable or disable callhome diagnostics.
+  
+  **Default:** `true`
+</ParamField>
+
+## Networking
+
+<ParamField path="--rpc_bind_addresses" type="string">
+  Comma-separated list of network interface addresses to bind for RPC connections.
+  
+  **Default:** Private IP of the host (e.g., `172.161.x.x:9100`)
+  
+  <Note>
+  Values must match across all yb-tserver and yb-master configurations.
+  </Note>
+</ParamField>
+
+<ParamField path="--server_broadcast_addresses" type="string">
+  Public IP or DNS hostname of the server (with optional port) for server-to-server communication.
+  
+  **Default:** `""`
+</ParamField>
+
+<ParamField path="--dns_cache_expiration_ms" type="int32">
+  Duration in milliseconds until a cached DNS resolution expires.
+  
+  **Default:** `60000` (1 minute)
+</ParamField>
+
+<ParamField path="--use_private_ip" type="string">
+  Policy for using private IP addresses for inter-node communication.
+  
+  **Valid values:**
+  - `never` - Always use broadcast addresses
+  - `zone` - Use private IP within zone
+  - `region` - Use private IP within region
+  
+  **Default:** `never`
+</ParamField>
+
+<ParamField path="--redis_proxy_bind_address" type="string">
+  Address to bind the Redis proxy to.
+  
+  **Default:** `""`
+</ParamField>
+
+<ParamField path="--cql_proxy_bind_address" type="string">
+  Address to bind the CQL proxy to.
+  
+  **Default:** `""`
+</ParamField>
+
+<ParamField path="--pgsql_proxy_bind_address" type="string">
+  Address to bind the PostgreSQL proxy to.
+  
+  **Default:** `""`
+  
+  <Info>Requires restart after modification.</Info>
+</ParamField>
+
+## Storage and Data Management
+
+<ParamField path="--fs_data_dirs" type="string" required>
+  Comma-separated list of mount directories where yb-tserver will create a `yb-data/tserver` data directory.
+  
+  <Warning>
+  Changing this value after cluster creation is not supported.
+  </Warning>
+</ParamField>
+
+<ParamField path="--fs_wal_dirs" type="string">
+  Comma-separated list of directories for write-ahead logs (WAL). Can be the same as `--fs_data_dirs` but not a subdirectory.
+  
+  **Default:** Same as `--fs_data_dirs`
+</ParamField>
+
+<ParamField path="--rocksdb_compact_flush_rate_limit_bytes_per_sec" type="int64">
+  Rate limit for RocksDB compaction and flush operations in bytes per second.
+  
+  **Default:** `256000000` (256 MB/s)
+</ParamField>
+
+<ParamField path="--rocksdb_block_cache_size_bytes" type="int64">
+  Size of the RocksDB block cache in bytes. Set to -1 for automatic sizing.
+  
+  **Default:** `-1` (auto)
+</ParamField>
+
+<ParamField path="--db_block_size_bytes" type="int32">
+  Size of RocksDB data blocks in bytes.
+  
+  **Default:** `32768` (32 KB)
+</ParamField>
+
+<ParamField path="--tablet_enable_ttl_file_filter" type="boolean">
+  Enable TTL-based file filtering to improve scan performance on tables with TTL.
+  
+  **Default:** `true`
+</ParamField>
+
+## Performance Tuning
+
+### Memory Management
+
+<ParamField path="--memory_limit_hard_bytes" type="int64">
+  Maximum memory this process should use in bytes. A value of 0 uses a percentage of total system memory.
+  
+  **Default:** `0`
+  
+  <Info>
+  For Kubernetes, this is automatically set from pod memory limits.
+  </Info>
+</ParamField>
+
+<ParamField path="--default_memory_limit_to_ram_ratio" type="double">
+  Percentage of available RAM to use when `--memory_limit_hard_bytes` is 0.
+  
+  **Default:** `0.10` (10%)
+  
+  <Note>
+  Does not apply to Kubernetes deployments.
+  </Note>
+</ParamField>
+
+<ParamField path="--use_memory_defaults_optimized_for_ysql" type="boolean">
+  When true, memory division defaults are optimized for YSQL and account for available RAM and cores.
+  
+  **Default:** `false` (set to `true` with yugabyted)
+</ParamField>
+
+### Compaction Settings
+
+<ParamField path="--scheduled_full_compaction_frequency_hours" type="int32">
+  Frequency in hours for scheduled full compaction. A value of 0 disables scheduled compaction.
+  
+  **Default:** `0` (disabled)
+</ParamField>
+
+<ParamField path="--auto_compact_percent_obsolete" type="double">
+  Percentage of obsolete keys required to trigger automatic compaction.
+  
+  **Default:** `99`
+</ParamField>
+
+<ParamField path="--auto_compact_min_obsolete_keys_found" type="uint32">
+  Minimum number of obsolete keys required to trigger automatic compaction.
+  
+  **Default:** `10000`
+</ParamField>
+
+<ParamField path="--auto_compact_min_wait_between_seconds" type="uint32">
+  Minimum wait time in seconds between automatic compactions.
+  
+  **Default:** `0`
+</ParamField>
+
+### Heartbeat Configuration
+
+<ParamField path="--heartbeat_interval_ms" type="int32">
+  Interval in milliseconds between heartbeats sent to the master.
+  
+  **Default:** `1000` (1 second)
+</ParamField>
+
+<ParamField path="--heartbeat_rpc_timeout_ms" type="int32">
+  Timeout in milliseconds for heartbeat RPC operations.
+  
+  **Default:** `15000` (15 seconds)
+</ParamField>
+
+<ParamField path="--heartbeat_max_failures_before_backoff" type="int32">
+  Number of consecutive heartbeat failures before backing off.
+  
+  **Default:** `3`
+</ParamField>
+
+## PostgreSQL Configuration Parameters
+
+YugabyteDB uses PostgreSQL server configuration parameters for YSQL. You can modify these parameters using several methods, listed in order of precedence (lowest to highest):
+
+1. **PostgreSQL server configuration flag** (`--ysql_pg_conf_csv`)
+   ```bash
+   --ysql_pg_conf_csv=yb_bnl_batch_size=512
+   ```
+
+2. **Direct YSQL flag** (if available with `ysql_` prefix)
+   ```bash
+   --ysql_yb_bnl_batch_size=512
+   ```
+
+3. **Per-database setting**
+   ```sql
+   ALTER DATABASE database_name SET yb_bnl_batch_size=512;
+   ```
+
+4. **Per-role setting**
+   ```sql
+   ALTER ROLE yugabyte SET yb_bnl_batch_size=512;
+   ```
+
+5. **Per-session setting**
+   ```sql
+   SET yb_bnl_batch_size=512;
+   ```
+
+6. **Per-transaction setting**
+   ```sql
+   SET LOCAL yb_bnl_batch_size=512;
+   ```
+
+<ParamField path="--ysql_pg_conf_csv" type="string">
+  Comma-separated list of PostgreSQL configuration parameters in key=value format.
+  
+  **Example:** `--ysql_pg_conf_csv="max_connections=200,shared_buffers=2GB"`
+</ParamField>
+
+<ParamField path="--enable_ysql" type="boolean">
+  Enable the YSQL API.
+  
+  **Default:** `true`
+  
+  <Note>
+  Must match the value on all yb-master servers.
+  </Note>
+</ParamField>
+
+<ParamField path="--ysql_enable_auth" type="boolean">
+  Enable YSQL authentication.
+  
+  **Default:** `false`
+</ParamField>
+
+<ParamField path="--ysql_hba_conf_csv" type="string">
+  Comma-separated list of PostgreSQL host-based authentication rules.
+</ParamField>
+
+## Security
+
+<ParamField path="--use_client_to_server_encryption" type="boolean">
+  Enable SSL/TLS encryption for client-to-server communications.
+  
+  **Default:** `false`
+</ParamField>
+
+<ParamField path="--use_node_to_node_encryption" type="boolean">
+  Enable SSL/TLS encryption for node-to-node communications.
+  
+  **Default:** `false`
+</ParamField>
+
+<ParamField path="--certs_dir" type="string">
+  Directory containing SSL certificate and key files.
+  
+  **Default:** `""`
+</ParamField>
+
+<ParamField path="--allow_insecure_connections" type="boolean">
+  Allow insecure connections when encryption is enabled.
+  
+  **Default:** `true`
+</ParamField>
+
+<ParamField path="--enable_ysql_conn_mgr" type="boolean">
+  Enable the YSQL connection manager for connection pooling.
+  
+  **Default:** `false`
+  
+  <Info>Requires restart after modification.</Info>
+</ParamField>
+
+<ParamField path="--ysql_conn_mgr_port" type="uint32">
+  Port for the YSQL connection manager.
+  
+  **Default:** `5433`
+</ParamField>
+
+## Metrics and Monitoring
+
+<ParamField path="--metrics_snapshotter_interval_ms" type="int32">
+  Interval in milliseconds for metrics snapshots.
+  
+  **Default:** `30000` (30 seconds)
+</ParamField>
+
+<ParamField path="--export_help_and_type_in_prometheus_metrics" type="boolean">
+  Include #TYPE and #HELP information in Prometheus metrics output.
+  
+  **Default:** `true`
+</ParamField>
+
+<ParamField path="--max_prometheus_metric_entries" type="uint32">
+  Maximum number of Prometheus metric entries returned per scrape.
+  
+  **Default:** `UINT32_MAX`
+</ParamField>
+
+<ParamField path="--export_intentdb_metrics" type="boolean">
+  Export IntentsDB statistics to Prometheus metrics.
+  
+  **Default:** `true`
+</ParamField>
+
+## Advanced Flags
+
+<ParamField path="--use_tablespace_based_transaction_placement" type="boolean">
+  Use tablespace-based placement for transaction status tables.
+  
+  **Default:** `false`
+</ParamField>
+
+<ParamField path="--report_ysql_ddl_txn_status_to_master" type="boolean">
+  Report YSQL DDL transaction status to master.
+  
+  **Default:** `true`
+</ParamField>
+
+<ParamField path="--pg_client_session_expiration_ms" type="uint64">
+  PostgreSQL client session expiration time in milliseconds.
+  
+  **Default:** `60000` (1 minute)
+</ParamField>
+
+## See Also
+
+- [yb-master Configuration](/reference/configuration/yb-master)
+- [yugabyted Reference](/reference/configuration/yugabyted)
+- [Configuration Flags Reference](/reference/configuration/flags)

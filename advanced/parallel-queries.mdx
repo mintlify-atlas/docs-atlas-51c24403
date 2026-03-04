@@ -1,0 +1,536 @@
+---
+title: 'Parallel Query Execution'
+description: 'Leverage multiple CPU cores for faster query execution using parallel query plans in YugabyteDB'
+---
+
+YugabyteDB supports PostgreSQL parallel query execution, enabling the query planner to distribute work across multiple CPU cores to accelerate query processing. This is especially beneficial for analytical workloads, large table scans, and aggregations.
+
+## Architecture
+
+Parallel queries in YugabyteDB leverage PostgreSQL's parallel execution framework:
+
+```
+                Query Coordinator (Leader)
+                        │
+         ┌──────────────┼──────────────┐
+         │              │              │
+    Worker 1        Worker 2      Worker 3
+         │              │              │
+    Scan Rows      Scan Rows      Scan Rows
+    (Partition 1)  (Partition 2)  (Partition 3)
+         │              │              │
+         └──────────────┴──────────────┘
+                        │
+                  Combine Results
+                        │
+                  Return to Client
+```
+
+### Parallel Execution Flow
+
+1. **Query Planning**: Planner determines if parallelism is beneficial
+2. **Worker Spawning**: Leader process spawns background worker processes
+3. **Work Distribution**: Each worker scans a portion of the data
+4. **Partial Aggregation**: Workers perform local aggregations/sorts
+5. **Result Gathering**: Leader gathers and combines worker results
+6. **Final Processing**: Leader completes final aggregation/sorting
+
+## Supported Operations
+
+Operations that can be parallelized:
+
+- **Parallel Sequential Scan**: Table scans distributed across workers
+- **Parallel Index Scan**: Index range scans parallelized
+- **Parallel Bitmap Heap Scan**: Bitmap index scans with parallel heap access
+- **Parallel Aggregation**: GROUP BY and aggregate functions
+- **Parallel Hash Joins**: Hash join build/probe phases parallelized
+- **Parallel Append**: For partitioned tables (UNION ALL)
+
+## Current Support
+
+**YugabyteDB v2025.2+**: Parallel queries supported for **colocated tables**. Support for hash-sharded and range-sharded tables is planned.
+
+### Colocated Tables
+
+Colocated tables store multiple tables in a single tablet, making them ideal for parallel processing:
+
+```sql
+-- Create colocated database
+CREATE DATABASE analytics WITH COLOCATION = true;
+
+-- Tables are automatically colocated
+CREATE TABLE sales (
+  id SERIAL PRIMARY KEY,
+  product_id INT,
+  amount DECIMAL,
+  sale_date DATE
+) WITH (COLOCATION = true);
+
+CREATE TABLE products (
+  id SERIAL PRIMARY KEY,
+  name TEXT,
+  category TEXT
+) WITH (COLOCATION = true);
+```
+
+## Configuration
+
+### Enabling Parallel Queries
+
+For YugabyteDB v2025.2+ universes:
+- **yugabyted deployments**: Enabled by default
+- **YugabyteDB Anywhere**: Enabled by default
+- **YugabyteDB Aeon**: Enabled by default
+
+For upgrades to v2025.2+ with cost-based optimizer enabled:
+- Parallel append automatically enabled
+
+### YugabyteDB-Specific Parameters
+
+```sql
+-- Enable parallel append (required for parallel queries)
+SET yb_enable_parallel_append = true;  -- Default: true (v2025.2+)
+
+-- Set rows per parallel worker (0 disables parallelism)
+SET yb_parallel_range_rows = 10000;   -- Default: 0 (disabled on upgrade)
+
+-- Approximate parallel range size for DocDB scans
+SET yb_parallel_range_size = '1MB';   -- Default: 1MB
+```
+
+**Key Parameter: `yb_parallel_range_rows`**
+- Controls parallel query activation threshold
+- Each worker processes approximately this many rows
+- `0` = parallel queries disabled
+- Recommended: `10000` for analytical workloads
+
+### PostgreSQL Parallel Parameters
+
+```sql
+-- Maximum parallel workers for queries
+SET max_parallel_workers_per_gather = 4;  -- Default: 2
+
+-- Total parallel workers across all queries
+SET max_parallel_workers = 8;             -- Default: 8
+
+-- Parallel workers for maintenance (CREATE INDEX, VACUUM)
+SET max_parallel_maintenance_workers = 4; -- Default: 2
+
+-- Cost of setting up parallel execution
+SET parallel_setup_cost = 1000;           -- Default: 1000
+
+-- Cost per tuple for parallel execution
+SET parallel_tuple_cost = 0.1;            -- Default: 0.1
+
+-- Enable parallel hash joins
+SET enable_parallel_hash = on;            -- Default: on
+```
+
+## Query Examples
+
+### Parallel Sequential Scan
+
+```sql
+-- Large table scan with aggregation
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT product_id, SUM(amount) AS total_sales
+FROM sales
+WHERE sale_date >= '2024-01-01'
+GROUP BY product_id;
+```
+
+**Execution Plan**:
+```
+Finalize GroupAggregate
+  Group Key: product_id
+  ->  Gather Merge
+        Workers Planned: 4
+        ->  Partial GroupAggregate
+              Group Key: product_id
+              ->  Parallel Seq Scan on sales
+                    Filter: (sale_date >= '2024-01-01'::date)
+```
+
+### Parallel Append (Partitioned Tables)
+
+```sql
+-- Create partitioned table
+CREATE TABLE orders (
+  id SERIAL,
+  customer_id INT,
+  order_date DATE,
+  amount DECIMAL,
+  PRIMARY KEY (id, order_date)
+) PARTITION BY RANGE (order_date)
+  WITH (COLOCATION = true);
+
+CREATE TABLE orders_2024_q1 PARTITION OF orders
+  FOR VALUES FROM ('2024-01-01') TO ('2024-04-01')
+  WITH (COLOCATION = true);
+
+CREATE TABLE orders_2024_q2 PARTITION OF orders
+  FOR VALUES FROM ('2024-04-01') TO ('2024-07-01')
+  WITH (COLOCATION = true);
+
+-- Query spans multiple partitions
+SELECT 
+  DATE_TRUNC('month', order_date) AS month,
+  SUM(amount) AS total
+FROM orders
+WHERE order_date BETWEEN '2024-01-01' AND '2024-06-30'
+GROUP BY month;
+```
+
+**Execution Plan**:
+```
+Finalize GroupAggregate
+  ->  Gather Merge
+        Workers Planned: 2
+        ->  Partial GroupAggregate
+              ->  Parallel Append
+                    ->  Parallel Seq Scan on orders_2024_q1
+                    ->  Parallel Seq Scan on orders_2024_q2
+```
+
+### Parallel Hash Join
+
+```sql
+SET enable_parallel_hash = on;
+SET max_parallel_workers_per_gather = 4;
+
+SELECT 
+  p.name,
+  p.category,
+  SUM(s.amount) AS total_sales
+FROM sales s
+JOIN products p ON s.product_id = p.id
+WHERE s.sale_date >= '2024-01-01'
+GROUP BY p.name, p.category;
+```
+
+**Execution Plan**:
+```
+Finalize GroupAggregate
+  ->  Gather Merge
+        Workers Planned: 4
+        ->  Partial GroupAggregate
+              ->  Parallel Hash Join
+                    Hash Cond: (s.product_id = p.id)
+                    ->  Parallel Seq Scan on sales s
+                    ->  Parallel Hash
+                          ->  Parallel Seq Scan on products p
+```
+
+### Parallel Aggregation
+
+```sql
+-- Complex aggregation with multiple functions
+SELECT 
+  category,
+  COUNT(*) AS num_products,
+  AVG(amount) AS avg_sale,
+  SUM(amount) AS total_sales,
+  MAX(amount) AS max_sale
+FROM sales s
+JOIN products p ON s.product_id = p.id
+GROUP BY category
+HAVING SUM(amount) > 100000;
+```
+
+## Performance Tuning
+
+### Determining Optimal Worker Count
+
+```sql
+-- Test with different worker counts
+SET max_parallel_workers_per_gather = 1;
+EXPLAIN (ANALYZE) SELECT ...;
+
+SET max_parallel_workers_per_gather = 2;
+EXPLAIN (ANALYZE) SELECT ...;
+
+SET max_parallel_workers_per_gather = 4;
+EXPLAIN (ANALYZE) SELECT ...;
+
+SET max_parallel_workers_per_gather = 8;
+EXPLAIN (ANALYZE) SELECT ...;
+```
+
+**Guidelines**:
+- Start with `max_parallel_workers_per_gather = 2`
+- Increase for very large tables (millions of rows)
+- Diminishing returns typically after 4-8 workers
+- Avoid more workers than available CPU cores
+
+### Cost-Based Tuning
+
+Adjust costs to influence planner decisions:
+
+```sql
+-- Favor parallel execution (lower setup cost)
+SET parallel_setup_cost = 100;   -- Default: 1000
+
+-- Discourage parallel execution (higher setup cost)
+SET parallel_setup_cost = 5000;
+
+-- Adjust per-tuple cost
+SET parallel_tuple_cost = 0.01;  -- Lower = more likely to parallelize
+SET parallel_tuple_cost = 1.0;   -- Higher = less likely to parallelize
+```
+
+### Forcing Parallel Execution
+
+```sql
+-- Force parallel plan (for testing)
+SET parallel_setup_cost = 0;
+SET parallel_tuple_cost = 0;
+SET min_parallel_table_scan_size = 0;
+SET min_parallel_index_scan_size = 0;
+
+-- Run query
+EXPLAIN (ANALYZE) SELECT ...;
+
+-- Reset to defaults
+RESET parallel_setup_cost;
+RESET parallel_tuple_cost;
+RESET min_parallel_table_scan_size;
+RESET min_parallel_index_scan_size;
+```
+
+### Disabling Parallel Execution
+
+```sql
+-- Disable for specific query
+SET max_parallel_workers_per_gather = 0;
+SELECT ...;
+RESET max_parallel_workers_per_gather;
+
+-- Disable via YugabyteDB parameter
+SET yb_parallel_range_rows = 0;
+
+-- Disable parallel append
+SET yb_enable_parallel_append = false;
+```
+
+## Monitoring and Analysis
+
+### EXPLAIN Output Analysis
+
+```sql
+EXPLAIN (ANALYZE, BUFFERS, VERBOSE)
+SELECT category, SUM(amount)
+FROM sales s
+JOIN products p ON s.product_id = p.id
+GROUP BY category;
+```
+
+**Key metrics to look for**:
+- `Workers Planned`: Number of parallel workers planned
+- `Workers Launched`: Actual workers spawned (may be less than planned)
+- `Execution Time`: Compare parallel vs. serial execution
+- `Buffers`: I/O operations (shared hit, read)
+
+### Performance Comparison
+
+```sql
+-- Serial execution
+SET max_parallel_workers_per_gather = 0;
+\timing on
+SELECT category, COUNT(*), SUM(amount)
+FROM sales s
+JOIN products p ON s.product_id = p.id
+GROUP BY category;
+-- Time: 5234.567 ms
+
+-- Parallel execution with 4 workers
+SET max_parallel_workers_per_gather = 4;
+SELECT category, COUNT(*), SUM(amount)
+FROM sales s
+JOIN products p ON s.product_id = p.id
+GROUP BY category;
+-- Time: 1567.234 ms (3.3x speedup)
+```
+
+### System Resource Monitoring
+
+```sql
+-- Check active parallel workers
+SELECT 
+  pid,
+  usename,
+  application_name,
+  backend_type,
+  state,
+  query
+FROM pg_stat_activity
+WHERE backend_type = 'parallel worker'
+ORDER BY pid;
+
+-- Monitor worker utilization
+SELECT 
+  datname,
+  COUNT(*) FILTER (WHERE backend_type = 'parallel worker') AS parallel_workers,
+  COUNT(*) AS total_connections
+FROM pg_stat_activity
+GROUP BY datname;
+```
+
+## Use Cases
+
+### Analytical Dashboards
+
+```sql
+-- Daily sales summary (analytical query)
+SET max_parallel_workers_per_gather = 4;
+
+SELECT 
+  DATE_TRUNC('day', sale_date) AS day,
+  p.category,
+  COUNT(DISTINCT s.id) AS num_sales,
+  SUM(s.amount) AS total_revenue,
+  AVG(s.amount) AS avg_sale
+FROM sales s
+JOIN products p ON s.product_id = p.id
+WHERE sale_date >= CURRENT_DATE - INTERVAL '90 days'
+GROUP BY day, p.category
+ORDER BY day DESC, total_revenue DESC;
+```
+
+### Report Generation
+
+```sql
+-- Monthly financial report
+SELECT 
+  TO_CHAR(sale_date, 'YYYY-MM') AS month,
+  p.category,
+  COUNT(*) AS transactions,
+  SUM(s.amount) AS revenue,
+  SUM(s.amount) - SUM(p.cost * s.quantity) AS profit
+FROM sales s
+JOIN products p ON s.product_id = p.id
+WHERE sale_date >= '2024-01-01'
+GROUP BY month, p.category
+HAVING SUM(s.amount) > 10000
+ORDER BY month, revenue DESC;
+```
+
+### Data Export
+
+```sql
+-- Large data export with parallel scan
+COPY (
+  SELECT 
+    s.*,
+    p.name AS product_name,
+    p.category
+  FROM sales s
+  JOIN products p ON s.product_id = p.id
+  WHERE sale_date >= '2024-01-01'
+) TO '/tmp/sales_export.csv' CSV HEADER;
+```
+
+## Best Practices
+
+1. **Start Conservative**:
+   - Begin with `max_parallel_workers_per_gather = 2`
+   - Increase gradually based on performance testing
+   - Monitor CPU and memory usage
+
+2. **Use for Appropriate Workloads**:
+   - ✅ Analytical queries on large datasets
+   - ✅ Aggregations and reporting
+   - ✅ Batch processing
+   - ❌ OLTP queries (single-row lookups)
+   - ❌ Short-running queries (overhead > benefit)
+
+3. **Resource Awareness**:
+   - Don't exceed available CPU cores
+   - Account for concurrent queries
+   - Monitor memory usage (each worker uses memory)
+
+4. **Testing and Benchmarking**:
+   - Use `EXPLAIN (ANALYZE)` to verify parallelism
+   - Compare execution times: parallel vs. serial
+   - Test with production-like data volumes
+
+5. **Configuration Management**:
+   - Set session-level parameters for specific queries
+   - Use connection pooling to control parallelism
+   - Document optimal settings for critical queries
+
+## Limitations
+
+### Current Limitations
+
+- **Table Types**: Parallel queries currently supported only for colocated tables
+- **Hash/Range-Sharded Tables**: Parallel execution support planned for future releases
+
+### PostgreSQL Limitations (Inherited)
+
+- **Transaction Isolation**: Some operations not parallelizable in certain isolation levels
+- **Write Queries**: DML operations (INSERT/UPDATE/DELETE) not parallelized
+- **Cursors**: `DECLARE CURSOR` queries not parallelized
+- **CTEs**: Recursive CTEs and data-modifying CTEs not parallelized
+
+### When Parallelism Is Not Used
+
+Planner may avoid parallelism when:
+- Table too small (below `min_parallel_table_scan_size`)
+- Setup cost exceeds estimated benefit
+- Maximum workers already in use
+- Query contains non-parallel-safe functions
+- Transaction in serializable isolation level
+
+## Troubleshooting
+
+### Query Not Using Parallelism
+
+```sql
+-- Check planner's decision
+EXPLAIN (VERBOSE) SELECT ...;
+
+-- Verify configuration
+SHOW yb_enable_parallel_append;
+SHOW yb_parallel_range_rows;
+SHOW max_parallel_workers_per_gather;
+
+-- Check table is colocated
+SELECT tablename, relname, 
+       (reloptions::text LIKE '%colocation=true%') AS is_colocated
+FROM pg_class c
+JOIN pg_tables t ON t.tablename = c.relname
+WHERE schemaname = 'public';
+```
+
+### Fewer Workers Than Expected
+
+```sql
+-- Check system-wide worker limit
+SHOW max_parallel_workers;
+
+-- Check current worker usage
+SELECT COUNT(*) FROM pg_stat_activity 
+WHERE backend_type = 'parallel worker';
+
+-- Increase limits if needed
+ALTER SYSTEM SET max_parallel_workers = 16;
+SELECT pg_reload_conf();
+```
+
+### High CPU Usage
+
+```sql
+-- Reduce parallelism
+SET max_parallel_workers_per_gather = 2;
+
+-- Adjust cost parameters to discourage parallelism
+SET parallel_setup_cost = 10000;
+SET parallel_tuple_cost = 1.0;
+```
+
+## Learn More
+
+- [PostgreSQL Parallel Query Documentation](https://www.postgresql.org/docs/15/parallel-query.html)
+- [How Parallel Query Works](https://www.postgresql.org/docs/15/how-parallel-query-works.html)
+- [YugabyteDB Colocated Tables](/architecture/docdb-sharding/colocated-tables)
+- [Query Optimization](/architecture/query-layer/planner-optimizer)

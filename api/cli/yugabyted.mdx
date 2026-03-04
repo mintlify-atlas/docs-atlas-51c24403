@@ -1,0 +1,625 @@
+---
+title: yugabyted
+description: Command-line tool for deploying and managing YugabyteDB universes
+---
+
+`yugabyted` is a command-line utility for deploying and managing YugabyteDB universes locally on your laptop or on VMs for production deployments.
+
+## Synopsis
+
+```bash
+yugabyted [-h] [command] [flags]
+```
+
+## Description
+
+yugabyted provides a simplified way to manage YugabyteDB clusters without directly managing YB-Master and YB-TServer processes. It handles installation, configuration, and lifecycle management of YugabyteDB nodes.
+
+Key features:
+- Single command to start/stop/destroy clusters
+- Built-in configuration for multi-zone/multi-region deployments
+- Integrated backup and restore capabilities
+- Support for xCluster replication
+- Point-in-time recovery (PITR) configuration
+- TLS/SSL certificate generation
+
+## Installation
+
+The yugabyted executable is packaged with YugabyteDB and located in the `bin` directory.
+
+## Base Directory
+
+By default, yugabyted uses `$HOME/var` to store data, configurations, and logs. You can override this with the `--base_dir` flag:
+
+```bash
+yugabyted start --base_dir /home/user/node1
+```
+
+When using a custom base directory, you must specify it for all subsequent commands.
+
+## Commands
+
+### start
+
+Start a YugabyteDB node and optionally join an existing cluster.
+
+```bash
+yugabyted start [flags]
+```
+
+#### Common Flags
+
+| Flag | Description |
+|------|-------------|
+| `--advertise_address` | IP address to advertise to other nodes |
+| `--base_dir` | Base directory for data, logs, and configuration |
+| `--cloud_location` | Cloud location in format `cloud.region.zone` |
+| `--join` | Join existing cluster at specified address |
+| `--listen` | (Deprecated) Use `--advertise_address` instead |
+| `--master_flags` | Additional flags for yb-master |
+| `--tserver_flags` | Additional flags for yb-tserver |
+| `--master_webserver_port` | Master web server port (default: 7000) |
+| `--tserver_webserver_port` | TServer web server port (default: 9000) |
+| `--ysql_port` | YSQL port (default: 5433) |
+| `--ycql_port` | YCQL port (default: 9042) |
+| `--background` | Run in background mode (default: true) |
+| `--ui` | Enable yugabyted UI (default: true) |
+
+#### Security Flags
+
+| Flag | Description |
+|------|-------------|
+| `--secure` | Enable TLS/SSL encryption |
+| `--insecure` | Start in insecure mode |
+| `--certs_dir` | Directory containing TLS certificates |
+| `--ysql_enable_auth` | Enable YSQL authentication |
+| `--use_cassandra_authentication` | Enable YCQL authentication |
+
+#### Advanced Flags
+
+| Flag | Description |
+|------|-------------|
+| `--fault_tolerance` | Fault tolerance level: `none`, `zone`, `region` |
+| `--rf` | Replication factor (default: 3) |
+| `--read_replica` | Start as read replica node |
+| `--backup_daemon` | Enable backup daemon |
+| `--callhome` | Enable telemetry (default: true) |
+| `--enhance_time_sync_via_clockbound` | Use clockbound for time synchronization |
+| `--initial_scripts_dir` | Directory with initialization scripts |
+
+#### Examples
+
+```bash
+# Create a single-node local cluster
+yugabyted start
+
+# Join other nodes in the same cluster
+yugabyted start --join=host:port
+
+# Create a secure cluster
+yugabyted start --secure --certs_dir=/path/to/certs
+
+# Use clockbound for precise time
+yugabyted start --enhance_time_sync_via_clockbound
+
+# Start with custom cloud location
+yugabyted start --cloud_location=aws.us-west-2.us-west-2a
+```
+
+### stop
+
+Stop a running YugabyteDB node.
+
+```bash
+yugabyted stop [flags]
+```
+
+#### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--base_dir` | Base directory of the node to stop |
+
+#### Example
+
+```bash
+yugabyted stop --base_dir /home/user/node1
+```
+
+### destroy
+
+Destroy a YugabyteDB cluster and remove all data.
+
+```bash
+yugabyted destroy [flags]
+```
+
+#### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--base_dir` | Base directory of the node to destroy |
+
+#### Example
+
+```bash
+yugabyted destroy --base_dir /home/user/node1
+```
+
+### status
+
+Print the status of a YugabyteDB cluster.
+
+```bash
+yugabyted status [flags]
+```
+
+#### Example Output
+
+```bash
+$ yugabyted status
++--------------------------------------------------------------------------------------------------+
+|                                            yugabyted                                             |
++--------------------------------------------------------------------------------------------------+
+| Status              : Running.                                                                   |
+| Replication Factor  : 1                                                                          |
+| YugabyteDB UI       : http://127.0.0.1:15433                                                     |
+| JDBC                : jdbc:postgresql://127.0.0.1:5433/yugabyte?user=yugabyte&password=yugabyte  |
+| YSQL                : bin/ysqlsh -h 127.0.0.1                                                    |
+| YCQL                : bin/ycqlsh 127.0.0.1 9042 -u cassandra                                     |
+| Data Dir            : /home/user/var/data                                                        |
+| Log Dir             : /home/user/var/logs                                                        |
++--------------------------------------------------------------------------------------------------+
+```
+
+### version
+
+Display the YugabyteDB version.
+
+```bash
+yugabyted version
+```
+
+### configure
+
+Configure cluster settings for data placement, encryption, admin operations, and PITR.
+
+#### configure data_placement
+
+Configure multi-zone or multi-region data placement.
+
+```bash
+yugabyted configure data_placement --fault_tolerance=<zone|region> [flags]
+```
+
+##### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--fault_tolerance` | Fault tolerance level: `zone` or `region` |
+| `--constraint_value` | Data placement constraint |
+| `--rf` | Replication factor |
+| `--base_dir` | Base directory |
+
+##### Example
+
+```bash
+# Configure multi-zone cluster
+yugabyted configure data_placement --fault_tolerance=zone
+```
+
+#### configure encrypt_at_rest
+
+Enable or disable encryption at rest.
+
+```bash
+yugabyted configure encrypt_at_rest --enable|--disable [flags]
+```
+
+##### Examples
+
+```bash
+# Enable encryption at rest
+yugabyted configure encrypt_at_rest --enable
+
+# Disable encryption at rest
+yugabyted configure encrypt_at_rest --disable
+```
+
+#### configure admin_operation
+
+Execute yb-admin commands on the cluster.
+
+```bash
+yugabyted configure admin_operation --command <yb-admin_command> [flags]
+```
+
+##### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--command` | yb-admin command to execute |
+| `--master_addresses` | Comma-separated master addresses |
+
+##### Example
+
+```bash
+yugabyted configure admin_operation --command "list_all_masters"
+```
+
+#### configure point_in_time_recovery
+
+Configure point-in-time recovery for databases or keyspaces.
+
+```bash
+yugabyted configure point_in_time_recovery [flags]
+```
+
+##### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--enable` | Enable PITR |
+| `--disable` | Disable PITR |
+| `--database` | YSQL database name |
+| `--keyspace` | YCQL keyspace name |
+| `--retention` | Retention period in days |
+| `--status` | Display PITR status |
+
+##### Examples
+
+```bash
+# Enable PITR for a database with 7-day retention
+yugabyted configure point_in_time_recovery --enable --database yugabyte --retention 7
+
+# Check PITR status
+yugabyted configure point_in_time_recovery --status
+
+# Disable PITR
+yugabyted configure point_in_time_recovery --disable --database yugabyte
+```
+
+### configure_read_replica
+
+Configure, modify, or delete read replica clusters.
+
+#### configure_read_replica new
+
+Create a new read replica cluster.
+
+```bash
+yugabyted configure_read_replica new --rf=<replication_factor> \
+  --data_placement_constraint=<placement_policy>
+```
+
+#### configure_read_replica modify
+
+Modify an existing read replica cluster.
+
+```bash
+yugabyted configure_read_replica modify --rf=<new_replication_factor> \
+  --data_placement_constraint=<new_placement_policy>
+```
+
+#### configure_read_replica delete
+
+Delete a read replica cluster.
+
+```bash
+yugabyted configure_read_replica delete
+```
+
+### backup
+
+Back up a YugabyteDB database to cloud storage or network file system.
+
+```bash
+yugabyted backup --database=<name> --cloud_storage_uri=<uri> [flags]
+```
+
+#### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--database` | YSQL database to backup |
+| `--keyspace` | YCQL keyspace to backup |
+| `--cloud_storage_uri` | S3, GCS, Azure, or NFS path |
+| `--status` | Check backup task status |
+| `--base_dir` | Base directory |
+
+#### Examples
+
+```bash
+# Backup to AWS S3
+yugabyted backup --database=northwind --cloud_storage_uri=s3://my-bucket/backups
+
+# Backup to network file storage
+yugabyted backup --database=northwind --cloud_storage_uri=/nfs/backups
+
+# Check backup status
+yugabyted backup --database=northwind --cloud_storage_uri=s3://my-bucket --status
+```
+
+### restore
+
+Restore a YugabyteDB database from cloud storage or perform point-in-time recovery.
+
+```bash
+yugabyted restore --database=<name> --cloud_storage_uri=<uri> [flags]
+```
+
+#### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--database` | YSQL database to restore |
+| `--keyspace` | YCQL keyspace to restore |
+| `--cloud_storage_uri` | S3, GCS, Azure, or NFS path |
+| `--recover_to_point_in_time` | Timestamp for PITR |
+| `--status` | Check restore task status |
+| `--base_dir` | Base directory |
+
+#### Examples
+
+```bash
+# Restore from S3
+yugabyted restore --database=northwind --cloud_storage_uri=s3://my-bucket/backups
+
+# Point-in-time recovery
+yugabyted restore --recover_to_point_in_time '2024-01-29 9:30:00 PM' --database yugabyte
+
+# Check restore status
+yugabyted restore --database=northwind --cloud_storage_uri=s3://my-bucket --status
+```
+
+### connect
+
+Connect to the YugabyteDB cluster using YSQL or YCQL shell.
+
+#### connect ysql
+
+Connect using ysqlsh.
+
+```bash
+yugabyted connect ysql [flags]
+```
+
+##### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--username` | YSQL username |
+| `--password` | YSQL password |
+| `--database` | Database name |
+| `--base_dir` | Base directory |
+
+##### Example
+
+```bash
+yugabyted connect ysql --username yugabyte --database northwind
+```
+
+#### connect ycql
+
+Connect using ycqlsh.
+
+```bash
+yugabyted connect ycql [flags]
+```
+
+##### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--username` | YCQL username |
+| `--password` | YCQL password |
+| `--keyspace` | Keyspace name |
+| `--base_dir` | Base directory |
+
+##### Example
+
+```bash
+yugabyted connect ycql --username cassandra --keyspace system
+```
+
+### demo
+
+Load and interact with preset demo data.
+
+#### demo connect
+
+Connect to a demo database with sample data.
+
+```bash
+yugabyted demo connect [flags]
+```
+
+#### demo destroy
+
+Destroy the demo database.
+
+```bash
+yugabyted demo destroy [flags]
+```
+
+### cert
+
+Generate TLS/SSL certificates for secure clusters.
+
+#### cert generate_server_certs
+
+Generate server certificates for cluster nodes.
+
+```bash
+yugabyted cert generate_server_certs --hostnames=<comma_separated_hostnames>
+```
+
+##### Example
+
+```bash
+yugabyted cert generate_server_certs --hostnames=node1.example.com,node2.example.com,node3.example.com
+```
+
+### collect_logs
+
+Collect and package logs for troubleshooting.
+
+```bash
+yugabyted collect_logs [flags]
+```
+
+#### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--stdout` | Output logs to stdout (for Docker) |
+| `--collect_at_dir` | Directory to store logs.tar.gz |
+| `--base_dir` | Base directory |
+
+#### Examples
+
+```bash
+# Collect logs to file
+yugabyted collect_logs
+
+# Collect logs in Docker
+docker exec <container-id> bin/yugabyted collect_logs --stdout > yugabyted.tar.gz
+```
+
+### upgrade
+
+Upgrade YugabyteDB nodes to a new version.
+
+#### upgrade ysql_catalog
+
+Upgrade YSQL catalog metadata.
+
+```bash
+yugabyted upgrade ysql_catalog [--timeout=<milliseconds>]
+```
+
+#### upgrade finalize_new_version
+
+Finalize the upgrade to the new version.
+
+```bash
+yugabyted upgrade finalize_new_version [--timeout=<milliseconds>]
+```
+
+#### upgrade check_version_compatibility
+
+Check version compatibility before upgrading.
+
+```bash
+yugabyted upgrade check_version_compatibility [--timeout=<milliseconds>]
+```
+
+### finalize_upgrade
+
+Finalize the upgrade process for the cluster.
+
+```bash
+yugabyted finalize_upgrade [--upgrade_ysql_timeout=<milliseconds>]
+```
+
+### xcluster
+
+Setup and manage xCluster replication between clusters.
+
+#### xcluster create_checkpoint
+
+Initialize xCluster replication (run on source cluster).
+
+```bash
+yugabyted xcluster create_checkpoint --replication_id=<id> --databases=<db_list> [flags]
+```
+
+##### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--replication_id` | Unique replication identifier |
+| `--databases` | Comma-separated database names |
+| `--automatic_mode` | Setup in automatic mode |
+
+##### Example
+
+```bash
+yugabyted xcluster create_checkpoint --replication_id=rep1 --databases=db1,db2
+```
+
+#### xcluster add_to_checkpoint
+
+Add databases to an existing xCluster checkpoint (run on source).
+
+```bash
+yugabyted xcluster add_to_checkpoint --replication_id=<id> --databases=<db_list>
+```
+
+#### xcluster set_up
+
+Setup xCluster replication (run on source cluster).
+
+```bash
+yugabyted xcluster set_up --target_address=<ip> --replication_id=<id> --bootstrap_done
+```
+
+##### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--target_address` | IP of target cluster node |
+| `--replication_id` | Replication ID from checkpoint |
+| `--bootstrap_done` | Indicate bootstrapping complete |
+
+#### xcluster add_to_replication
+
+Add databases to existing replication (run on source).
+
+```bash
+yugabyted xcluster add_to_replication --target_address=<ip> \
+  --replication_id=<id> --databases=<db_list> --bootstrap_done
+```
+
+#### xcluster status
+
+Display xCluster replication status.
+
+```bash
+yugabyted xcluster status [--base_dir=<dir>]
+```
+
+#### xcluster delete_replication
+
+Delete xCluster replication (run on source).
+
+```bash
+yugabyted xcluster delete_replication --replication_id=<id>
+```
+
+#### xcluster remove_database_from_replication
+
+Remove databases from replication (run on source).
+
+```bash
+yugabyted xcluster remove_database_from_replication --replication_id=<id> --databases=<db_list>
+```
+
+## Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `YB_DISABLE_CALLHOME` | Disable telemetry (set to `true`) |
+| `YSQL_PASSWORD` | Default YSQL password |
+| `YCQL_USER` | Default YCQL username |
+| `YCQL_PASSWORD` | Default YCQL password |
+
+## Exit Status
+
+yugabyted returns 0 on success, non-zero on failure.
+
+## See Also
+
+- [yb-admin](/api/cli/yb-admin) - Advanced cluster administration
+- [ysqlsh](/api/cli/ysqlsh) - YSQL shell
+- [ycqlsh](/api/cli/ycqlsh) - YCQL shell

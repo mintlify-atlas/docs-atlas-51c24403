@@ -1,0 +1,640 @@
+---
+title: yb-admin
+description: Advanced command-line tool for YugabyteDB cluster administration
+---
+
+`yb-admin` is a command-line tool for advanced administration of YugabyteDB clusters.
+
+## Synopsis
+
+```bash
+yb-admin [--master_addresses <master-addresses>] \
+         [--init_master_addrs <master-address>] \
+         [--timeout_ms <milliseconds>] \
+         [--certs_dir_name <dir-name>] \
+         <command> [command_flags]
+```
+
+## Description
+
+yb-admin invokes the YB-Master and YB-TServer servers to perform cluster administration tasks. It provides low-level operations for:
+
+- Cluster configuration and status
+- Table and tablet management
+- Backup and snapshot operations
+- Deployment topology configuration
+- Security and encryption settings
+- Change data capture (CDC)
+- xCluster replication
+- Load balancing and decommissioning
+
+**Important**: yb-admin is intended for manually created and managed clusters only. If using YugabyteDB Anywhere or YugabyteDB Aeon, use their respective UIs or APIs instead.
+
+## Installation
+
+yb-admin is located in the `bin` directory of YugabyteDB home.
+
+## Global Flags
+
+### --master_addresses
+
+Comma-separated list of YB-Master hosts and ports.
+
+**Default**: `localhost:7100`
+
+```bash
+yb-admin --master_addresses 192.168.1.10:7100,192.168.1.11:7100,192.168.1.12:7100 list_all_masters
+```
+
+### --init_master_addrs
+
+Single YB-Master address from which other masters are discovered.
+
+```bash
+yb-admin --init_master_addrs 192.168.1.10:7100 list_all_masters
+```
+
+### --timeout_ms
+
+RPC timeout in milliseconds.
+
+**Default**: `60000` (1 minute)
+- `0`: Don't wait
+- `-1`: Wait indefinitely
+
+```bash
+yb-admin --timeout_ms 120000 list_all_tablet_servers
+```
+
+### --certs_dir_name
+
+Directory containing certificates for secure server connections.
+
+**Default**: `""` (empty)
+
+Required for TLS-enabled clusters:
+
+```bash
+yb-admin --master_addresses master1:7100,master2:7100,master3:7100 \
+         --certs_dir_name /opt/yugabyte/certs \
+         list_all_masters
+```
+
+## Online Help
+
+```bash
+# General help
+yb-admin --help
+
+# Command-specific help (where available)
+yb-admin <command> --help
+```
+
+## Common Commands
+
+### Cluster Information
+
+#### get_universe_config
+
+Get the configuration of the universe.
+
+```bash
+yb-admin --master_addresses master1:7100 get_universe_config
+```
+
+#### list_all_masters
+
+List all YB-Master servers with their status and role.
+
+```bash
+yb-admin --master_addresses master1:7100 list_all_masters
+```
+
+**Example Output**:
+```
+Master UUID                        RPC Host/Port          State      Role
+1234567890abcdef1234567890abcdef  node1:7100            ALIVE     LEADER
+abcdef1234567890abcdef1234567890  node2:7100            ALIVE     FOLLOWER
+567890abcdef1234567890abcdef1234  node3:7100            ALIVE     FOLLOWER
+```
+
+#### list_all_tablet_servers
+
+List all YB-TServer nodes in the cluster.
+
+```bash
+yb-admin --master_addresses master1:7100 list_all_tablet_servers
+```
+
+**Example Output**:
+```
+Tablet Server UUID                 RPC Host/Port          State
+1234567890abcdef1234567890abcdef  node1:9100            ALIVE
+abcdef1234567890abcdef1234567890  node2:9100            ALIVE
+567890abcdef1234567890abcdef1234  node3:9100            ALIVE
+```
+
+### Table Operations
+
+#### list_tables
+
+List all tables in the cluster.
+
+```bash
+yb-admin --master_addresses master1:7100 list_tables
+```
+
+Include table IDs:
+```bash
+yb-admin --master_addresses master1:7100 list_tables include_table_id
+```
+
+#### list_tablets
+
+List all tablets and their replica locations for a table.
+
+```bash
+yb-admin --master_addresses master1:7100 \
+         list_tablets ysql.mydb mytable [max_tablets]
+```
+
+**Arguments**:
+- `<keyspace-type>`: `ysql` or `ycql`
+- `<keyspace-name>`: Database or keyspace name
+- `<table>`: Table name
+- `[max-tablets]`: Maximum tablets to return (default: 10, use 0 for all)
+
+**Example**:
+```bash
+yb-admin --master_addresses master1:7100 list_tablets ysql.postgres users 0
+```
+
+**Output**:
+```
+Tablet UUID                       Range                                                     Leader
+cea3aaac2f10460a880b0b4a2a4b652a  partition_key_start: "" partition_key_end: "\177\377"     192.168.1.10:9100
+e509cf8eedba410ba3b60c7e9138d479  partition_key_start: "\177\377" partition_key_end: ""    192.168.1.11:9100
+```
+
+### Cluster Configuration
+
+#### change_master_config
+
+Add or remove a YB-Master server.
+
+```bash
+yb-admin --master_addresses master1:7100 \
+         change_master_config ADD_SERVER <ip-addr> <port> [<uuid>]
+
+yb-admin --master_addresses master1:7100 \
+         change_master_config REMOVE_SERVER <ip-addr> <port> [<uuid>]
+```
+
+**Example**:
+```bash
+# Add master
+yb-admin --master_addresses master1:7100 \
+         change_master_config ADD_SERVER 192.168.1.14 7100
+
+# Remove master
+yb-admin --master_addresses master1:7100 \
+         change_master_config REMOVE_SERVER 192.168.1.14 7100
+```
+
+#### change_config
+
+Change the configuration of a tablet.
+
+```bash
+yb-admin --master_addresses master1:7100 \
+         change_config <tablet-id> ADD_SERVER <peer-uuid> PRE_VOTER
+
+yb-admin --master_addresses master1:7100 \
+         change_config <tablet-id> REMOVE_SERVER <peer-uuid>
+```
+
+### Data Placement
+
+#### modify_placement_info
+
+Modify the placement information for a cluster.
+
+```bash
+yb-admin --master_addresses master1:7100 \
+         modify_placement_info <placement_info> <replication_factor> [<placement_uuid>]
+```
+
+**Example**:
+```bash
+# Set up multi-zone cluster
+yb-admin --master_addresses master1:7100 \
+         modify_placement_info aws.us-west-2.us-west-2a,aws.us-west-2.us-west-2b,aws.us-west-2.us-west-2c 3
+```
+
+#### set_preferred_zones
+
+Set preferred availability zones for leader placement.
+
+```bash
+yb-admin --master_addresses master1:7100 \
+         set_preferred_zones <cloud>.<region>.<zone>[:priority] [<cloud>.<region>.<zone>[:priority]]...
+```
+
+**Example**:
+```bash
+yb-admin --master_addresses master1:7100 \
+         set_preferred_zones aws.us-west-2.us-west-2a:1 aws.us-west-2.us-west-2b:2
+```
+
+### Backup and Snapshots
+
+#### create_snapshot
+
+Create a snapshot of specified tables.
+
+```bash
+yb-admin --master_addresses master1:7100 \
+         create_snapshot <keyspace-type>.<keyspace> <table> [<table>]...
+```
+
+**Example**:
+```bash
+yb-admin --master_addresses master1:7100 \
+         create_snapshot ysql.mydb table1 table2
+```
+
+#### list_snapshots
+
+List all snapshots.
+
+```bash
+yb-admin --master_addresses master1:7100 list_snapshots
+```
+
+#### restore_snapshot
+
+Restore from a snapshot.
+
+```bash
+yb-admin --master_addresses master1:7100 \
+         restore_snapshot <snapshot_id> [<restore_time>]
+```
+
+#### delete_snapshot
+
+Delete a snapshot.
+
+```bash
+yb-admin --master_addresses master1:7100 \
+         delete_snapshot <snapshot_id>
+```
+
+#### export_snapshot
+
+Export a snapshot to external storage.
+
+```bash
+yb-admin --master_addresses master1:7100 \
+         export_snapshot <snapshot_id> <file_name>
+```
+
+#### import_snapshot
+
+Import a snapshot from external storage.
+
+```bash
+yb-admin --master_addresses master1:7100 \
+         import_snapshot <file_name> [<keyspace-type>.<keyspace> <table>]...
+```
+
+### Load Balancing
+
+#### set_load_balancer_enabled
+
+Enable or disable automatic load balancing.
+
+```bash
+yb-admin --master_addresses master1:7100 \
+         set_load_balancer_enabled <0|1>
+```
+
+**Example**:
+```bash
+# Disable load balancer
+yb-admin --master_addresses master1:7100 set_load_balancer_enabled 0
+
+# Enable load balancer
+yb-admin --master_addresses master1:7100 set_load_balancer_enabled 1
+```
+
+#### get_load_balancer_state
+
+Get current state of the load balancer.
+
+```bash
+yb-admin --master_addresses master1:7100 get_load_balancer_state
+```
+
+### Blacklisting
+
+#### change_blacklist
+
+Add or remove tablet servers from the blacklist.
+
+```bash
+yb-admin --master_addresses master1:7100 \
+         change_blacklist ADD <ip_addr>:<port> [<ip_addr>:<port>]...
+
+yb-admin --master_addresses master1:7100 \
+         change_blacklist REMOVE <ip_addr>:<port> [<ip_addr>:<port>]...
+```
+
+**Example**:
+```bash
+# Blacklist servers
+yb-admin --master_addresses master1:7100 \
+         change_blacklist ADD 192.168.1.15:9100 192.168.1.16:9100
+
+# Remove from blacklist
+yb-admin --master_addresses master1:7100 \
+         change_blacklist REMOVE 192.168.1.15:9100
+```
+
+#### get_leader_blacklist
+
+Get current leader blacklist.
+
+```bash
+yb-admin --master_addresses master1:7100 get_leader_blacklist
+```
+
+### Encryption at Rest
+
+#### add_universe_key_to_all_masters
+
+Add encryption key to all masters.
+
+```bash
+yb-admin --master_addresses master1:7100 \
+         add_universe_key_to_all_masters <key_id> <key_path>
+```
+
+#### rotate_universe_key_in_memory
+
+Rotate encryption key in memory.
+
+```bash
+yb-admin --master_addresses master1:7100 \
+         rotate_universe_key_in_memory <key_id>
+```
+
+#### disable_encryption_at_rest
+
+Disable encryption at rest.
+
+```bash
+yb-admin --master_addresses master1:7100 disable_encryption_at_rest
+```
+
+#### is_encryption_at_rest_enabled
+
+Check if encryption at rest is enabled.
+
+```bash
+yb-admin --master_addresses master1:7100 is_encryption_at_rest_enabled
+```
+
+### xCluster Replication
+
+#### setup_universe_replication
+
+Setup xCluster replication between universes.
+
+```bash
+yb-admin --master_addresses source_master:7100 \
+         setup_universe_replication <replication_id> \
+         <target_master_addresses> \
+         <source_table_id> [<source_table_id>]...
+```
+
+#### delete_universe_replication
+
+Delete xCluster replication.
+
+```bash
+yb-admin --master_addresses source_master:7100 \
+         delete_universe_replication <replication_id>
+```
+
+#### get_universe_replication_info
+
+Get xCluster replication information.
+
+```bash
+yb-admin --master_addresses master1:7100 get_universe_replication_info
+```
+
+### Change Data Capture (CDC)
+
+#### create_change_data_stream
+
+Create a CDC stream.
+
+```bash
+yb-admin --master_addresses master1:7100 \
+         create_change_data_stream ysql.mydb
+```
+
+#### list_change_data_streams
+
+List all CDC streams.
+
+```bash
+yb-admin --master_addresses master1:7100 list_change_data_streams
+```
+
+#### delete_change_data_stream
+
+Delete a CDC stream.
+
+```bash
+yb-admin --master_addresses master1:7100 \
+         delete_change_data_stream <stream_id>
+```
+
+### Leadership
+
+#### master_leader_stepdown
+
+Step down the master leader.
+
+```bash
+yb-admin --master_addresses master1:7100 \
+         master_leader_stepdown [<new_leader_uuid>]
+```
+
+#### leader_stepdown
+
+Step down the leader for a tablet.
+
+```bash
+yb-admin --master_addresses master1:7100 \
+         leader_stepdown <tablet_id> [<dest_ts_uuid>]
+```
+
+### Tablet Operations
+
+#### flush_table
+
+Flush a table (force memstore to disk).
+
+```bash
+yb-admin --master_addresses master1:7100 \
+         flush_table ysql.mydb mytable
+```
+
+#### compact_table
+
+Compact a table.
+
+```bash
+yb-admin --master_addresses master1:7100 \
+         compact_table ysql.mydb mytable
+```
+
+## Expression Syntax
+
+Many commands use these expression formats:
+
+### Namespace Expression
+
+```
+[(ycql|ysql).]<namespace_name>
+```
+
+**Default**: `ycql.`
+
+**Examples**:
+- `ysql.mydb`
+- `ycql.mykeyspace`
+- `mykeyspace` (assumes YCQL)
+
+### Table Expression
+
+```
+<namespace> <table_name> | tableid.<table_id>
+```
+
+**Examples**:
+- `ysql.mydb users`
+- `tableid.a1b2c3d4-e5f6-7890-abcd-ef1234567890`
+
+### Index Expression
+
+```
+<namespace> <index_name> | tableid.<index_id>
+```
+
+## Advanced Usage Examples
+
+### Cluster Maintenance
+
+```bash
+# Disable load balancer before maintenance
+yb-admin --master_addresses master1:7100 set_load_balancer_enabled 0
+
+# Blacklist nodes for maintenance
+yb-admin --master_addresses master1:7100 \
+         change_blacklist ADD 192.168.1.15:9100
+
+# Perform maintenance...
+
+# Remove from blacklist
+yb-admin --master_addresses master1:7100 \
+         change_blacklist REMOVE 192.168.1.15:9100
+
+# Re-enable load balancer
+yb-admin --master_addresses master1:7100 set_load_balancer_enabled 1
+```
+
+### Backup and Restore
+
+```bash
+# Create snapshot
+yb-admin --master_addresses master1:7100 \
+         create_snapshot ysql.mydb table1 table2
+
+# List snapshots to get snapshot ID
+yb-admin --master_addresses master1:7100 list_snapshots
+
+# Export snapshot
+yb-admin --master_addresses master1:7100 \
+         export_snapshot <snapshot_id> /backup/snapshot.dat
+
+# On target cluster, import snapshot
+yb-admin --master_addresses target_master:7100 \
+         import_snapshot /backup/snapshot.dat ysql.mydb_new table1 table2
+```
+
+### Multi-Region Setup
+
+```bash
+# Configure placement across 3 regions
+yb-admin --master_addresses master1:7100 \
+         modify_placement_info \
+         aws.us-west-1.us-west-1a,aws.us-west-2.us-west-2a,aws.us-east-1.us-east-1a 3
+
+# Set leader preference
+yb-admin --master_addresses master1:7100 \
+         set_preferred_zones aws.us-west-1.us-west-1a:1 aws.us-west-2.us-west-2a:2
+```
+
+### TLS-Enabled Cluster
+
+```bash
+# All commands need --certs_dir_name for TLS clusters
+yb-admin --master_addresses master1:7100,master2:7100,master3:7100 \
+         --certs_dir_name /opt/yugabyte/certs \
+         list_all_masters
+
+yb-admin --master_addresses master1:7100,master2:7100,master3:7100 \
+         --certs_dir_name /opt/yugabyte/certs \
+         list_all_tablet_servers
+```
+
+## Troubleshooting
+
+### Connection Issues
+
+```bash
+# Test with increased timeout
+yb-admin --master_addresses master1:7100 --timeout_ms 120000 list_all_masters
+
+# Test with init_master_addrs instead
+yb-admin --init_master_addrs master1:7100 list_all_masters
+
+# Check if masters are accessible
+telnet master1 7100
+```
+
+### Certificate Issues
+
+```bash
+# Verify certs directory contains ca.crt
+ls -la /opt/yugabyte/certs/
+
+# Ensure proper permissions
+chmod 600 /opt/yugabyte/certs/*
+```
+
+## Exit Status
+
+yb-admin returns 0 on success, non-zero on failure.
+
+## See Also
+
+- [yugabyted](/api/cli/yugabyted) - Simplified cluster management
+- [yb-master](/reference/configuration/yb-master) - Master server configuration
+- [yb-tserver](/reference/configuration/yb-tserver) - Tablet server configuration
+- [ysqlsh](/api/cli/ysqlsh) - YSQL shell
+- [ycqlsh](/api/cli/ycqlsh) - YCQL shell

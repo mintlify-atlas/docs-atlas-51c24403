@@ -1,0 +1,395 @@
+---
+title: yb-master Configuration
+description: YugabyteDB Master Server (yb-master) configuration flags and parameters
+---
+
+The YB-Master server is the central coordinator in a YugabyteDB cluster, responsible for cluster metadata management, catalog operations, and coordinating cluster-wide operations. Use the yb-master binary and its configuration flags to manage and optimize your YugabyteDB deployment.
+
+## Overview
+
+The yb-master executable is located in the `bin` directory of your YugabyteDB installation. YB-Master servers maintain cluster metadata, perform DDL operations, and coordinate system-wide tasks like load balancing and tablet management.
+
+<Note>
+If you are using YugabyteDB Anywhere, set flags using the **Edit Flags** feature in the platform UI rather than modifying configuration files directly.
+</Note>
+
+## Syntax
+
+```bash
+yb-master [flags]
+```
+
+### Example
+
+```bash
+./bin/yb-master \
+  --master_addresses 172.151.17.130:7100,172.151.17.220:7100,172.151.17.140:7100 \
+  --rpc_bind_addresses 172.151.17.130 \
+  --fs_data_dirs "/home/centos/disk1,/home/centos/disk2" \
+  --replication_factor=3
+```
+
+### Online Help
+
+To display command-line help:
+
+```bash
+./bin/yb-master --help
+```
+
+## General Configuration Flags
+
+### Core Flags
+
+<ParamField path="--version" type="flag">
+  Shows version and build information, then exits.
+</ParamField>
+
+<ParamField path="--flagfile" type="string">
+  Specifies the configuration file to load flags from. This allows you to store all flags in a file instead of passing them on the command line.
+</ParamField>
+
+<ParamField path="--master_addresses" type="string" required>
+  Specifies a comma-separated list of all RPC addresses for YB-Master consensus configuration.
+  
+  **Default:** `127.0.0.1:7100`
+  
+  <Note>
+  The number of comma-separated values should match the total number of YB-Master servers (typically equal to the replication factor).
+  </Note>
+</ParamField>
+
+<ParamField path="--fs_data_dirs" type="string" required>
+  Specifies a comma-separated list of mount directories where yb-master will create a `yb-data/master` data directory, along with `master.err`, `master.out`, and `pg_data` directories.
+  
+  <Warning>
+  Changing this value after cluster creation is not supported.
+  </Warning>
+</ParamField>
+
+<ParamField path="--fs_wal_dirs" type="string">
+  Specifies a comma-separated list of directories where YB-Master will store write-ahead logs (WAL). This can be the same as one of the directories in `--fs_data_dirs`, but not a subdirectory.
+  
+  **Default:** Same value as `--fs_data_dirs`
+</ParamField>
+
+### Networking Flags
+
+<ParamField path="--rpc_bind_addresses" type="string">
+  Specifies the comma-separated list of network interface addresses to bind for RPC connections.
+  
+  **Default:** Private IP address of the host (e.g., `172.161.x.x:7100`)
+  
+  <Note>
+  Values must match across all yb-master and yb-tserver configurations. If set to `0.0.0.0`, ensure `server_broadcast_addresses` is configured correctly.
+  </Note>
+</ParamField>
+
+<ParamField path="--server_broadcast_addresses" type="string">
+  Specifies the public IP or DNS hostname of the server (with optional port). Used by servers to communicate with one another.
+  
+  **Default:** `""`
+</ParamField>
+
+<ParamField path="--dns_cache_expiration_ms" type="int32">
+  Duration in milliseconds until a cached DNS resolution expires. Reduces latency and improves load times by caching DNS lookups.
+  
+  **Default:** `60000` (1 minute)
+</ParamField>
+
+<ParamField path="--use_private_ip" type="string">
+  Policy determining when to use private IP addresses for inter-node communication.
+  
+  **Valid values:**
+  - `never` - Always use `server_broadcast_addresses`
+  - `zone` - Use private IP within a zone; use broadcast address outside the zone
+  - `region` - Use private IP across all zones in a region; use broadcast address outside the region
+  
+  **Default:** `never`
+</ParamField>
+
+### Web Server Flags
+
+<ParamField path="--webserver_interface" type="string">
+  Specifies the bind address for web server user interface access.
+  
+  **Default:** `0.0.0.0`
+</ParamField>
+
+<ParamField path="--webserver_port" type="int32">
+  Specifies the web server monitoring port.
+  
+  **Default:** `7000`
+</ParamField>
+
+<ParamField path="--webserver_doc_root" type="string">
+  Specifies the monitoring web server home directory.
+  
+  **Default:** The `www` directory in YugabyteDB home
+</ParamField>
+
+<ParamField path="--webserver_certificate_file" type="string">
+  Location of the SSL certificate file (in .pem format) for the web server. If empty, SSL is not enabled.
+  
+  **Default:** `""`
+</ParamField>
+
+<ParamField path="--webserver_authentication_domain" type="string">
+  Domain used for .htpasswd authentication. Use with `--webserver_password_file`.
+  
+  **Default:** `""`
+</ParamField>
+
+<ParamField path="--webserver_password_file" type="string">
+  Location of .htpasswd file containing usernames and hashed passwords for web server authentication.
+  
+  **Default:** `""`
+</ParamField>
+
+## YSQL Flags
+
+<ParamField path="--enable_ysql" type="boolean">
+  Enables the YSQL API when set to true.
+  
+  **Default:** `true`
+  
+  <Note>
+  Ensure this value matches across all yb-master and yb-tserver configurations.
+  </Note>
+</ParamField>
+
+<ParamField path="--enable_pg_cron" type="boolean">
+  Set to true on all YB-Masters and YB-TServers to enable the pg_cron extension.
+  
+  **Default:** `false`
+</ParamField>
+
+<ParamField path="--ysql_follower_reads_avoid_waiting_for_safe_time" type="boolean">
+  Controls whether YSQL follower reads with not-yet-safe read times should be rejected, forcing them to the leader.
+  
+  **Default:** `true`
+</ParamField>
+
+<ParamField path="--master_ysql_operation_lease_ttl_ms" type="int32">
+  Specifies the base YSQL lease Time-To-Live (TTL) in milliseconds. The YB-Master leader uses this to determine YB-TServer YSQL lease validity.
+  
+  **Default:** `300000` (5 minutes)
+</ParamField>
+
+<ParamField path="--ysql_operation_lease_ttl_client_buffer_ms" type="int32">
+  Specifies a client-side buffer for the YSQL operation lease TTL in milliseconds.
+  
+  **Default:** `2000` (2 seconds)
+</ParamField>
+
+## Cluster Configuration Flags
+
+<ParamField path="--replication_factor" type="int32">
+  Number of replicas for each tablet in the cluster.
+  
+  **Default:** `3`
+  
+  **Valid range:** 1-7 (odd numbers recommended for proper quorum)
+</ParamField>
+
+<ParamField path="--max_create_tablets_per_ts" type="int32">
+  Maximum number of tablets that can be created per tablet server during table creation.
+  
+  **Default:** `50`
+</ParamField>
+
+<ParamField path="--master_failover_catchup_timeout_ms" type="int32">
+  Timeout in milliseconds for a new master leader to catch up on operations during failover.
+  
+  **Default:** `30000` (30 seconds)
+</ParamField>
+
+<ParamField path="--catalog_manager_check_ts_count_for_create_table" type="boolean">
+  Whether to check if sufficient tablet servers are available before creating a table.
+  
+  **Default:** `true`
+</ParamField>
+
+## Logging Flags
+
+<ParamField path="--log_dir" type="string">
+  Directory where YB-Master log files are written.
+  
+  **Default:** Same as `--fs_data_dirs`
+</ParamField>
+
+<ParamField path="--logtostderr" type="boolean">
+  Write log messages to stderr instead of log files.
+  
+  **Default:** `false`
+</ParamField>
+
+<ParamField path="--max_log_size" type="int32">
+  Maximum log file size in megabytes. A value of 0 is overridden to 1.
+  
+  **Default:** `1800` (1.8 GB)
+</ParamField>
+
+<ParamField path="--minloglevel" type="int32">
+  Minimum log level for messages. Values: 0 (INFO), 1 (WARN), 2 (ERROR), 3 (FATAL).
+  
+  **Default:** `0` (INFO)
+</ParamField>
+
+<ParamField path="--stderrthreshold" type="int32">
+  Log messages at or above this level are copied to stderr in addition to log files.
+  
+  **Default:** `2`
+</ParamField>
+
+<ParamField path="--colorlogtostderr" type="boolean">
+  Color messages logged to stderr (if supported by terminal).
+  
+  **Default:** `false`
+</ParamField>
+
+<ParamField path="--callhome_enabled" type="boolean">
+  Enable or disable callhome diagnostics.
+  
+  **Default:** `true`
+</ParamField>
+
+## Memory Flags
+
+<ParamField path="--memory_limit_hard_bytes" type="int64">
+  Maximum memory this process should use in bytes. A value of 0 uses a percentage of total system memory. A value of -1 disables memory limiting.
+  
+  **Default:** `0`
+  
+  <Note>
+  For Kubernetes deployments, this is automatically set from pod memory limits.
+  </Note>
+</ParamField>
+
+<ParamField path="--default_memory_limit_to_ram_ratio" type="double">
+  Percentage of available RAM to use when `--memory_limit_hard_bytes` is 0. Special value -1000 uses the default.
+  
+  **Default:** `0.10` (10% of RAM)
+</ParamField>
+
+<ParamField path="--use_memory_defaults_optimized_for_ysql" type="boolean">
+  When true, memory division defaults are optimized for YSQL workloads and account for available RAM and cores.
+  
+  **Default:** `false` (set to `true` when using yugabyted or YugabyteDB Anywhere)
+</ParamField>
+
+## Performance Tuning Flags
+
+<ParamField path="--master_svc_queue_length" type="int32">
+  RPC queue length for the master service.
+  
+  **Default:** `1000`
+</ParamField>
+
+<ParamField path="--master_consensus_svc_queue_length" type="int32">
+  RPC queue length for the master consensus service.
+  
+  **Default:** `1000`
+</ParamField>
+
+<ParamField path="--master_tserver_svc_queue_length" type="int32">
+  RPC queue length for the master tablet server service.
+  
+  **Default:** `1000`
+</ParamField>
+
+<ParamField path="--master_rpc_timeout_ms" type="int32">
+  Timeout for master RPC operations in milliseconds.
+  
+  **Default:** `1500`
+</ParamField>
+
+<ParamField path="--master_yb_client_default_timeout_ms" type="int32">
+  Default timeout for YB client operations from master in milliseconds.
+  
+  **Default:** `60000` (1 minute)
+</ParamField>
+
+## Index Backfill Flags
+
+<ParamField path="--defer_index_backfill" type="boolean">
+  If enabled, YB-Master avoids launching new index-backfill jobs for YCQL indexes. Requires manual execution of `yb-admin backfill_indexes_for_table`.
+  
+  **Default:** `false`
+</ParamField>
+
+<ParamField path="--allow_batching_non_deferred_indexes" type="boolean">
+  If enabled, indexes on the same YCQL table may be batched together during backfill, even if not deferred.
+  
+  **Default:** `true`
+</ParamField>
+
+<ParamField path="--index_backfill_rpc_timeout_ms" type="int32">
+  Timeout for index backfill RPC operations in milliseconds.
+  
+  **Default:** `30000` (30 seconds)
+</ParamField>
+
+<ParamField path="--index_backfill_rpc_max_retries" type="int32">
+  Maximum number of retries for index backfill RPC operations.
+  
+  **Default:** `150`
+</ParamField>
+
+## Transaction Table Flags
+
+<ParamField path="--transaction_table_num_tablets" type="int32">
+  Number of tablets to use for transaction status tables. A value of 0 enables automatic calculation.
+  
+  **Default:** `0` (auto-detect)
+</ParamField>
+
+<ParamField path="--auto_create_local_transaction_tables" type="boolean">
+  Automatically create local transaction tables for tablespaces.
+  
+  **Default:** `true`
+</ParamField>
+
+## Security Flags
+
+<ParamField path="--use_client_to_server_encryption" type="boolean">
+  Enable SSL/TLS encryption for client-to-server communications.
+  
+  **Default:** `false`
+</ParamField>
+
+<ParamField path="--use_node_to_node_encryption" type="boolean">
+  Enable SSL/TLS encryption for node-to-node communications.
+  
+  **Default:** `false`
+</ParamField>
+
+<ParamField path="--certs_dir" type="string">
+  Directory containing SSL certificate and key files.
+  
+  **Default:** `""`
+</ParamField>
+
+## Time Synchronization
+
+<ParamField path="--time_source" type="string">
+  Specifies the time source used by the database. Set to `clockbound` for highly accurate time sources.
+  
+  **Default:** `""`
+  
+  <Note>
+  Using `clockbound` requires additional system configuration for time synchronization.
+  </Note>
+</ParamField>
+
+<ParamField path="--max_clock_skew_usec" type="int64">
+  Maximum expected clock skew between nodes in microseconds.
+  
+  **Default:** `500000` (500 ms)
+</ParamField>
+
+## See Also
+
+- [yb-tserver Configuration](/reference/configuration/yb-tserver)
+- [yugabyted Reference](/reference/configuration/yugabyted)
+- [Configuration Flags Reference](/reference/configuration/flags)

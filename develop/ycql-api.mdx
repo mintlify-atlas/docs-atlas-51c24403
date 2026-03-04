@@ -1,0 +1,644 @@
+---
+title: YCQL API Reference
+description: Cassandra-compatible distributed NoSQL API
+icon: 'table-cells'
+---
+
+Yugabyte Cloud Query Language (YCQL) is a semi-relational SQL API that is best fit for internet-scale OLTP and HTAP applications needing massive data ingestion and blazing-fast queries. It has its roots in the Cassandra Query Language (CQL).
+
+## Overview
+
+YCQL provides a flexible schema with support for:
+
+- Wide-column data model
+- Strongly consistent secondary indexes
+- Native JSON column type
+- Distributed transactions
+- Cassandra-compatible wire protocol
+
+<Tip>
+YCQL is ideal for applications requiring high write throughput, time-series data, and flexible schemas.
+</Tip>
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="High Write Throughput" icon="bolt">
+    Optimized for massive write-intensive workloads
+  </Card>
+  <Card title="Flexible Schema" icon="table">
+    Wide-column model with dynamic columns
+  </Card>
+  <Card title="CQL Compatible" icon="cassandra">
+    Compatible with Apache Cassandra applications
+  </Card>
+  <Card title="Strong Consistency" icon="check-double">
+    Linearizable consistency for all operations
+  </Card>
+</CardGroup>
+
+## API Components
+
+### Keyspaces
+
+Keyspaces are the top-level database objects in YCQL (equivalent to databases in SQL).
+
+```sql
+-- Create keyspace
+CREATE KEYSPACE myapp;
+
+-- Create keyspace with replication
+CREATE KEYSPACE myapp WITH REPLICATION = {
+    'class': 'SimpleStrategy',
+    'replication_factor': 3
+};
+
+-- Use keyspace
+USE myapp;
+
+-- Drop keyspace
+DROP KEYSPACE myapp;
+```
+
+### Tables
+
+YCQL tables use a partition key and optional clustering columns.
+
+<CodeGroup>
+```sql Basic Table
+-- Simple table with partition key
+CREATE TABLE users (
+    user_id UUID PRIMARY KEY,
+    username TEXT,
+    email TEXT,
+    created_at TIMESTAMP
+);
+```
+
+```sql Composite Keys
+-- Table with partition and clustering keys
+CREATE TABLE user_events (
+    user_id UUID,
+    event_time TIMESTAMP,
+    event_type TEXT,
+    event_data JSONB,
+    PRIMARY KEY (user_id, event_time)
+) WITH CLUSTERING ORDER BY (event_time DESC);
+```
+
+```sql Multiple Partition Keys
+-- Table with compound partition key
+CREATE TABLE sensor_data (
+    sensor_id INT,
+    location TEXT,
+    timestamp TIMESTAMP,
+    temperature DOUBLE,
+    humidity DOUBLE,
+    PRIMARY KEY ((sensor_id, location), timestamp)
+) WITH CLUSTERING ORDER BY (timestamp DESC);
+```
+</CodeGroup>
+
+### Data Types
+
+YCQL supports various data types:
+
+<AccordionGroup>
+  <Accordion title="Numeric Types">
+    - `INT`, `BIGINT`, `SMALLINT`, `TINYINT`
+    - `DOUBLE`, `FLOAT`
+    - `DECIMAL`
+    - `VARINT`
+    - `COUNTER`
+    
+    ```sql
+    CREATE TABLE metrics (
+        id UUID PRIMARY KEY,
+        count COUNTER,
+        value DOUBLE,
+        total DECIMAL
+    );
+    ```
+  </Accordion>
+
+  <Accordion title="String and Binary">
+    - `TEXT`, `VARCHAR`
+    - `BLOB`
+    
+    ```sql
+    CREATE TABLE documents (
+        doc_id UUID PRIMARY KEY,
+        title TEXT,
+        content TEXT,
+        attachment BLOB
+    );
+    ```
+  </Accordion>
+
+  <Accordion title="Date and Time">
+    - `TIMESTAMP`
+    - `DATE`
+    - `TIME`
+    - `TIMEUUID`
+    
+    ```sql
+    CREATE TABLE events (
+        event_id TIMEUUID PRIMARY KEY,
+        event_date DATE,
+        event_timestamp TIMESTAMP
+    );
+    ```
+  </Accordion>
+
+  <Accordion title="Collections">
+    - `LIST<type>`
+    - `SET<type>`
+    - `MAP<keytype, valuetype>`
+    
+    ```sql
+    CREATE TABLE user_profile (
+        user_id UUID PRIMARY KEY,
+        tags SET<TEXT>,
+        phone_numbers LIST<TEXT>,
+        attributes MAP<TEXT, TEXT>
+    );
+    
+    -- Insert with collections
+    INSERT INTO user_profile (user_id, tags, phone_numbers, attributes)
+    VALUES (
+        uuid(),
+        {'developer', 'postgresql', 'yugabyte'},
+        ['+1-555-1234', '+1-555-5678'],
+        {'country': 'US', 'city': 'San Francisco'}
+    );
+    ```
+  </Accordion>
+
+  <Accordion title="JSON Type">
+    - `JSONB` (binary JSON format)
+    
+    ```sql
+    CREATE TABLE products (
+        product_id UUID PRIMARY KEY,
+        name TEXT,
+        attributes JSONB
+    );
+    
+    -- Insert JSON data
+    INSERT INTO products (product_id, name, attributes) 
+    VALUES (
+        uuid(), 
+        'Laptop',
+        '{"brand": "Dell", "specs": {"ram": "16GB", "storage": "512GB"}}'
+    );
+    
+    -- Query JSON fields
+    SELECT name, attributes->>'brand' as brand FROM products;
+    SELECT * FROM products WHERE attributes->'specs'->>'ram' = '16GB';
+    ```
+  </Accordion>
+
+  <Accordion title="UUID Types">
+    - `UUID`
+    - `TIMEUUID` (time-based UUID)
+    
+    ```sql
+    CREATE TABLE sessions (
+        session_id UUID PRIMARY KEY,
+        created_at TIMEUUID,
+        user_id UUID
+    );
+    
+    -- Generate UUIDs
+    INSERT INTO sessions (session_id, created_at, user_id)
+    VALUES (uuid(), now(), uuid());
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### Data Manipulation
+
+#### INSERT
+
+<CodeGroup>
+```sql Basic Insert
+-- Simple insert
+INSERT INTO users (user_id, username, email, created_at)
+VALUES (uuid(), 'john_doe', 'john@example.com', toTimestamp(now()));
+
+-- Insert with TTL (Time To Live)
+INSERT INTO sessions (session_id, user_id, data)
+VALUES (uuid(), uuid(), 'session_data')
+USING TTL 3600;  -- Expires in 1 hour
+```
+
+```sql Conditional Insert
+-- Insert only if not exists
+INSERT INTO users (user_id, username, email)
+VALUES (uuid(), 'john_doe', 'john@example.com')
+IF NOT EXISTS;
+```
+
+```sql With Timestamp
+-- Insert with custom timestamp
+INSERT INTO events (event_id, event_type, data)
+VALUES (uuid(), 'login', 'user logged in')
+USING TIMESTAMP 1234567890;
+```
+</CodeGroup>
+
+#### SELECT
+
+<CodeGroup>
+```sql Basic Select
+-- Select all columns
+SELECT * FROM users WHERE user_id = uuid();
+
+-- Select specific columns
+SELECT username, email FROM users WHERE user_id = uuid();
+
+-- Select with limit
+SELECT * FROM users LIMIT 10;
+```
+
+```sql Filtering
+-- Query with partition key
+SELECT * FROM user_events WHERE user_id = uuid();
+
+-- Query with partition and clustering keys
+SELECT * FROM user_events 
+WHERE user_id = uuid() 
+  AND event_time > '2024-01-01'
+  AND event_time < '2024-12-31';
+
+-- Query with ALLOW FILTERING (use cautiously)
+SELECT * FROM users WHERE email = 'john@example.com' ALLOW FILTERING;
+```
+
+```sql Ordering
+-- Order by clustering column
+SELECT * FROM user_events 
+WHERE user_id = uuid() 
+ORDER BY event_time DESC
+LIMIT 10;
+```
+</CodeGroup>
+
+#### UPDATE
+
+<CodeGroup>
+```sql Basic Update
+-- Update columns
+UPDATE users 
+SET email = 'newemail@example.com', username = 'jane_doe'
+WHERE user_id = uuid();
+
+-- Update with TTL
+UPDATE sessions 
+SET data = 'new_session_data'
+WHERE session_id = uuid()
+USING TTL 7200;
+```
+
+```sql Conditional Update
+-- Update with IF condition
+UPDATE users 
+SET email = 'newemail@example.com'
+WHERE user_id = uuid()
+IF email = 'oldemail@example.com';
+```
+
+```sql Collection Updates
+-- Add to set
+UPDATE user_profile 
+SET tags = tags + {'new_tag'}
+WHERE user_id = uuid();
+
+-- Remove from set
+UPDATE user_profile 
+SET tags = tags - {'old_tag'}
+WHERE user_id = uuid();
+
+-- Append to list
+UPDATE user_profile 
+SET phone_numbers = phone_numbers + ['+1-555-9999']
+WHERE user_id = uuid();
+
+-- Update map
+UPDATE user_profile 
+SET attributes['city'] = 'New York'
+WHERE user_id = uuid();
+```
+</CodeGroup>
+
+#### DELETE
+
+```sql
+-- Delete entire row
+DELETE FROM users WHERE user_id = uuid();
+
+-- Delete specific columns
+DELETE email FROM users WHERE user_id = uuid();
+
+-- Delete with condition
+DELETE FROM users 
+WHERE user_id = uuid()
+IF email = 'john@example.com';
+
+-- Delete from collection
+DELETE tags['old_tag'] FROM user_profile WHERE user_id = uuid();
+```
+
+### Indexes
+
+YCQL supports secondary indexes for non-primary-key queries.
+
+```sql
+-- Create index
+CREATE INDEX idx_users_email ON users(email);
+
+-- Create index on collection
+CREATE INDEX idx_user_tags ON user_profile(tags);
+
+-- Create index on JSON field
+CREATE INDEX idx_product_brand ON products(attributes->>'brand');
+
+-- Use index in query
+SELECT * FROM users WHERE email = 'john@example.com';
+
+-- Drop index
+DROP INDEX idx_users_email;
+```
+
+### Transactions
+
+YCQL supports distributed transactions across multiple rows and tables.
+
+```sql
+BEGIN TRANSACTION
+    -- Transfer funds between accounts
+    UPDATE accounts SET balance = balance - 100 WHERE account_id = uuid1;
+    UPDATE accounts SET balance = balance + 100 WHERE account_id = uuid2;
+    
+    -- Record transaction
+    INSERT INTO transactions (txn_id, from_account, to_account, amount)
+    VALUES (uuid(), uuid1, uuid2, 100);
+END TRANSACTION;
+```
+
+### User-Defined Types
+
+Create custom data types for complex structures.
+
+```sql
+-- Create user-defined type
+CREATE TYPE address (
+    street TEXT,
+    city TEXT,
+    state TEXT,
+    zip_code TEXT
+);
+
+-- Use UDT in table
+CREATE TABLE customers (
+    customer_id UUID PRIMARY KEY,
+    name TEXT,
+    home_address FROZEN<address>,
+    work_address FROZEN<address>
+);
+
+-- Insert with UDT
+INSERT INTO customers (customer_id, name, home_address)
+VALUES (
+    uuid(),
+    'John Doe',
+    {street: '123 Main St', city: 'San Francisco', state: 'CA', zip_code: '94105'}
+);
+```
+
+### Counters
+
+Special column type for distributed counters.
+
+```sql
+-- Create counter table
+CREATE TABLE page_views (
+    page_url TEXT PRIMARY KEY,
+    view_count COUNTER
+);
+
+-- Increment counter
+UPDATE page_views SET view_count = view_count + 1 
+WHERE page_url = '/home';
+
+-- Decrement counter
+UPDATE page_views SET view_count = view_count - 1 
+WHERE page_url = '/home';
+
+-- Query counter
+SELECT page_url, view_count FROM page_views;
+```
+
+### Built-in Functions
+
+<AccordionGroup>
+  <Accordion title="UUID Functions">
+    ```sql
+    -- Generate random UUID
+    SELECT uuid();
+    
+    -- Generate time-based UUID
+    SELECT now();
+    
+    -- Convert TIMEUUID to timestamp
+    SELECT toTimestamp(now());
+    
+    -- Extract date from TIMEUUID
+    SELECT toDate(now());
+    ```
+  </Accordion>
+
+  <Accordion title="Date/Time Functions">
+    ```sql
+    -- Current timestamp
+    SELECT toTimestamp(now());
+    
+    -- Current date
+    SELECT toDate(now());
+    
+    -- Convert timestamp to date
+    SELECT toDate(created_at) FROM users;
+    ```
+  </Accordion>
+
+  <Accordion title="Type Conversion">
+    ```sql
+    -- Convert types
+    SELECT CAST(count AS TEXT) FROM metrics;
+    
+    -- Convert to/from blob
+    SELECT textAsBlob('hello');
+    SELECT blobAsText(data);
+    ```
+  </Accordion>
+
+  <Accordion title="Aggregate Functions">
+    ```sql
+    -- Count rows
+    SELECT COUNT(*) FROM users;
+    
+    -- Sum values
+    SELECT SUM(amount) FROM transactions;
+    
+    -- Average
+    SELECT AVG(temperature) FROM sensor_data WHERE sensor_id = 1;
+    
+    -- Min/Max
+    SELECT MIN(temperature), MAX(temperature) FROM sensor_data;
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Time Series Data Pattern
+
+YCQL excels at time-series workloads:
+
+```sql
+-- Create time-series table
+CREATE TABLE sensor_readings (
+    sensor_id INT,
+    reading_time TIMESTAMP,
+    temperature DOUBLE,
+    humidity DOUBLE,
+    pressure DOUBLE,
+    PRIMARY KEY (sensor_id, reading_time)
+) WITH CLUSTERING ORDER BY (reading_time DESC)
+  AND default_time_to_live = 2592000;  -- 30 days retention
+
+-- Insert reading
+INSERT INTO sensor_readings (sensor_id, reading_time, temperature, humidity, pressure)
+VALUES (101, toTimestamp(now()), 72.5, 45.3, 1013.25);
+
+-- Query recent readings
+SELECT * FROM sensor_readings
+WHERE sensor_id = 101
+  AND reading_time > '2024-01-01'
+ORDER BY reading_time DESC
+LIMIT 100;
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Design Partition Keys Carefully">
+    Choose partition keys that distribute data evenly:
+    
+    ```sql
+    -- Good: Even distribution
+    CREATE TABLE events (
+        event_id UUID,
+        timestamp TIMESTAMP,
+        PRIMARY KEY (event_id, timestamp)
+    );
+    
+    -- Better: Add bucketing for very high cardinality
+    CREATE TABLE events (
+        bucket INT,
+        event_id UUID,
+        timestamp TIMESTAMP,
+        PRIMARY KEY ((bucket, event_id), timestamp)
+    );
+    ```
+  </Accordion>
+
+  <Accordion title="Use Clustering Columns for Range Queries">
+    Design tables for your query patterns:
+    
+    ```sql
+    -- Optimized for time-range queries
+    CREATE TABLE user_activity (
+        user_id UUID,
+        activity_date DATE,
+        activity_time TIMESTAMP,
+        action TEXT,
+        PRIMARY KEY (user_id, activity_date, activity_time)
+    ) WITH CLUSTERING ORDER BY (activity_date DESC, activity_time DESC);
+    ```
+  </Accordion>
+
+  <Accordion title="Leverage TTL for Automatic Data Expiry">
+    Use TTL for temporary data:
+    
+    ```sql
+    -- Table-level TTL
+    CREATE TABLE cache (
+        key TEXT PRIMARY KEY,
+        value TEXT
+    ) WITH default_time_to_live = 86400;  -- 24 hours
+    
+    -- Row-level TTL
+    INSERT INTO cache (key, value) VALUES ('temp', 'data')
+    USING TTL 3600;  -- 1 hour
+    ```
+  </Accordion>
+
+  <Accordion title="Minimize Use of ALLOW FILTERING">
+    Avoid ALLOW FILTERING in production:
+    
+    ```sql
+    -- Bad: Requires full table scan
+    SELECT * FROM users WHERE email = 'john@example.com' ALLOW FILTERING;
+    
+    -- Good: Create index
+    CREATE INDEX idx_users_email ON users(email);
+    SELECT * FROM users WHERE email = 'john@example.com';
+    ```
+  </Accordion>
+
+  <Accordion title="Use Batches for Multiple Writes">
+    ```sql
+    BEGIN BATCH
+        INSERT INTO users (user_id, username) VALUES (uuid(), 'user1');
+        INSERT INTO user_profile (user_id, bio) VALUES (uuid(), 'bio1');
+        UPDATE user_stats SET login_count = login_count + 1 WHERE user_id = uuid();
+    APPLY BATCH;
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## YCQL vs YSQL
+
+| Feature | YCQL | YSQL |
+|---------|------|------|
+| **Data Model** | Wide-column | Relational |
+| **Schema** | Flexible | Fixed |
+| **Joins** | Limited | Full support |
+| **Secondary Indexes** | Yes | Yes |
+| **Transactions** | Row-level, multi-table | Full ACID |
+| **Best For** | High write throughput, time-series | Complex queries, relational data |
+
+## Connection Information
+
+**Default Connection Parameters:**
+- Host: `localhost`
+- Port: `9042`
+- Keyspace: (none by default)
+- User: `cassandra`
+- Password: `cassandra`
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Build Apps" icon="code" href="/develop/build-apps">
+    Start building with YCQL
+  </Card>
+  <Card title="Drivers" icon="plug" href="/develop/drivers-orms">
+    YCQL drivers for your language
+  </Card>
+  <Card title="Data Modeling" icon="diagram-project" href="https://docs.yugabyte.com/stable/develop/data-modeling/">
+    Learn YCQL data modeling
+  </Card>
+  <Card title="Full API Docs" icon="book" href="https://docs.yugabyte.com/stable/api/ycql/">
+    Complete YCQL API reference
+  </Card>
+</CardGroup>

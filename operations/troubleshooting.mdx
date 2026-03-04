@@ -1,0 +1,767 @@
+---
+title: Troubleshooting
+description: Diagnose and resolve common issues in YugabyteDB clusters
+---
+
+This guide provides systematic approaches to diagnosing and resolving common YugabyteDB operational issues.
+
+## Diagnostic Approach
+
+### Troubleshooting Workflow
+
+1. **Identify symptoms** - What is failing or slow?
+2. **Check monitoring** - Review metrics and dashboards
+3. **Examine logs** - Look for errors and warnings
+4. **Isolate scope** - Single node, table, or cluster-wide?
+5. **Verify configuration** - Check flags and settings
+6. **Test hypothesis** - Make targeted changes
+7. **Document resolution** - Update runbooks
+
+### Initial Health Check
+
+```bash
+# Check cluster status
+yb-admin --master_addresses ip1:7100,ip2:7100,ip3:7100 \
+  get_universe_config
+
+# List all servers
+yb-admin --master_addresses ip1:7100,ip2:7100,ip3:7100 \
+  list_all_tablet_servers
+
+# Check for failed tablets
+./bin/yb-check-failed-tablets.sh \
+  --master_addresses ip1:7100,ip2:7100,ip3:7100
+```
+
+## Node Issues
+
+### Node Crashes and Restarts
+
+**Symptoms:**
+- Node disappears from cluster
+- Services not responding
+- Frequent restarts visible in logs
+
+**Diagnosis:**
+
+```bash
+# Check if services are running
+ps aux | grep yb-tserver
+ps aux | grep yb-master
+
+# View recent crash logs
+tail -100 /home/yugabyte/tserver/logs/yb-tserver.FATAL
+tail -100 /home/yugabyte/tserver/logs/yb-tserver.ERROR
+
+# Check for OOM killer
+dmesg | grep -i "out of memory"
+grep -i "killed process" /var/log/messages
+
+# Review stderr output
+cat /home/yugabyte/tserver/tserver.err
+```
+
+**Common Causes:**
+
+1. **Out of Memory:**
+   - Solution: Reduce block cache size, increase RAM
+   - Flag: `--db_block_cache_size_bytes`
+
+2. **Disk Full:**
+   - Solution: Run log cleanup, expand disk, check compaction
+   - Script: `./bin/log_cleanup.sh`
+
+3. **Corrupted Data:**
+   - Solution: See [Failed Tablets](#failed-tablets) section
+
+### YB-TServer Crash Loop
+
+When a tablet server repeatedly crashes and restarts:
+
+**Recovery Steps:**
+
+```bash
+# 1. Stop the service (YugabyteDB Anywhere)
+yb-server-ctl tserver stop
+
+# 2. Find problematic tablets from logs
+grep -i "FATAL\|CHECK\|SIGSEGV" /home/yugabyte/tserver/logs/yb-tserver.*
+# Note the tablet UUIDs mentioned
+
+# 3. Remove failed tablet data
+find /mnt/disk1 -name '*<tablet-uuid>*' | xargs rm -rf
+# Repeat for all disks in --fs_data_dirs
+
+# 4. Restart the service
+yb-server-ctl tserver start
+```
+
+The cluster will automatically re-replicate missing tablets.
+
+### Node Not Joining Cluster
+
+**Symptoms:**
+- New node added but not visible
+- Node shows in list but no tablets assigned
+
+**Diagnosis:**
+
+```bash
+# Check master connectivity
+curl http://master-ip:7000
+
+# Verify network connectivity
+ping <master-ip>
+telnet <master-ip> 7100
+
+# Check master addresses configuration
+grep tserver_master_addrs /home/yugabyte/tserver/conf/server.conf
+
+# View heartbeat status in logs
+grep -i "heartbeat" /home/yugabyte/tserver/logs/yb-tserver.INFO
+```
+
+**Resolution:**
+
+1. Verify `--tserver_master_addrs` matches master addresses
+2. Check firewall rules allow ports 7100, 9100
+3. Ensure clocks are synchronized (NTP)
+4. Restart tserver service if configuration changed
+
+## Failed Tablets
+
+### Identifying Failed Tablets
+
+**Using helper script:**
+
+```bash
+./bin/yb-check-failed-tablets.sh \
+  --master_addresses ip1:7100,ip2:7100,ip3:7100 \
+  --binary_path /path/to/yugabyte/bin
+```
+
+Output provides:
+- Tablet UUIDs in FAILED state
+- Tablet server locations
+- Tombstone commands for cleanup
+
+**Manual check:**
+
+```bash
+# List tablets for a tserver
+yb-admin --master_addresses ip1:7100,ip2:7100,ip3:7100 \
+  list_tablets_for_tablet_server <tserver-uuid>
+
+# Look for FAILED state in output
+```
+
+### Recovering Failed Tablets
+
+**Automatic recovery (preferred):**
+
+YugabyteDB automatically triggers remote bootstrap for most failures. Wait 15-30 minutes for automatic recovery.
+
+**Manual recovery:**
+
+```bash
+# 1. Find tablet data on disk
+find /mnt/d0 -name '*<tablet-uuid>*'
+
+# 2. Delete tablet data
+yb-ts-cli --server_address=<tserver-ip>:9000 \
+  delete_tablet <tablet-uuid> "Manual recovery after failure"
+
+# 3. Trigger remote bootstrap (automatic)
+# Cluster will detect missing replica and re-replicate
+```
+
+### Root Cause Analysis
+
+Before tombstoning tablets, investigate the cause:
+
+```bash
+# Check tablet-specific logs
+grep <tablet-uuid> /home/yugabyte/tserver/logs/yb-tserver.*
+
+# Look for:
+# - Corruption messages
+# - Disk I/O errors
+# - Memory allocation failures
+# - Raft consensus issues
+```
+
+## Performance Issues
+
+### High Latency
+
+**Symptoms:**
+- Queries taking longer than normal
+- Timeout errors
+- User-reported slowness
+
+**Diagnosis:**
+
+```bash
+# Check metrics endpoints
+curl http://tserver-ip:9000/metrics | grep latency
+
+# View slow operations log
+grep "took.*ms" /home/yugabyte/tserver/logs/yb-tserver.WARNING
+
+# Check YSQL slow queries
+SELECT query, calls, mean_exec_time, max_exec_time 
+FROM pg_stat_statements 
+ORDER BY mean_exec_time DESC LIMIT 10;
+```
+
+**Common Causes and Solutions:**
+
+1. **High CPU Usage (>80%):**
+   ```bash
+   # Check CPU per node
+   top -b -n 1 | grep yb-tserver
+   
+   # Solutions:
+   # - Add more nodes
+   # - Optimize queries
+   # - Reduce compaction threads temporarily
+   ```
+
+2. **Disk I/O Saturation:**
+   ```bash
+   # Check disk utilization
+   iostat -x 5
+   
+   # Solutions:
+   # - Use faster disks (NVMe)
+   # - Add more data directories
+   # - Adjust compaction settings
+   ```
+
+3. **Memory Pressure:**
+   ```bash
+   # Check memory usage
+   curl http://tserver-ip:9000/mem-trackers
+   
+   # Solutions:
+   # - Reduce block cache size
+   # - Add more RAM
+   # - Reduce concurrent operations
+   ```
+
+4. **Network Congestion:**
+   ```bash
+   # Check network stats
+   iftop -i eth0
+   
+   # Solutions:
+   # - Enable compression for cross-AZ traffic
+   # - Upgrade network capacity
+   # - Review replication factor
+   ```
+
+### Write Amplification
+
+**Symptoms:**
+- High disk writes relative to application writes
+- Slow write performance
+- Disk wearing out quickly (SSDs)
+
+**Diagnosis:**
+
+```bash
+# Check compaction stats
+curl http://tserver-ip:9000/metrics | grep rocksdb_compact
+
+# Calculate write amplification
+# WAF = (bytes_written_to_disk) / (bytes_written_by_app)
+```
+
+**Solutions:**
+
+1. Adjust compaction triggers:
+   ```bash
+   --rocksdb_level0_file_num_compaction_trigger=8
+   ```
+
+2. Increase memstore size:
+   ```bash
+   --memstore_size_mb=256
+   ```
+
+3. Use appropriate compaction style:
+   ```bash
+   # For YSQL workloads
+   --rocksdb_compact_flush_rate_limit_bytes_per_sec=268435456
+   ```
+
+### Query Timeouts
+
+**Symptoms:**
+- Client timeout errors
+- "Operation timed out" messages
+
+**Diagnosis:**
+
+```bash
+# Check RPC timeout settings
+grep timeout /home/yugabyte/tserver/conf/server.conf
+
+# Review timeout errors in logs
+grep -i "timeout" /home/yugabyte/tserver/logs/yb-tserver.WARNING
+
+# Check if operations are queued
+curl http://tserver-ip:9000/metrics | grep queue
+```
+
+**Solutions:**
+
+1. **Increase client timeout:**
+   ```python
+   # For YSQL
+   statement_timeout = '30s'
+   
+   # For YCQL
+   request_timeout_in_ms = 30000
+   ```
+
+2. **Increase RPC timeout:**
+   ```bash
+   --rpc_timeout_ms=30000  # 30 seconds
+   ```
+
+3. **Optimize slow queries:**
+   - Add appropriate indexes
+   - Reduce data scanned
+   - Use prepared statements
+
+## Replication Issues
+
+### High Replication Lag
+
+**Symptoms:**
+- Follower lag metric increasing
+- Stale reads from followers
+- Remote bootstrap failures
+
+**Diagnosis:**
+
+```bash
+# Check replication lag
+curl http://tserver-ip:9000/metrics | grep follower_lag_ms
+
+# View consensus metrics
+curl http://tserver-ip:9000/metrics | grep consensus
+
+# Check for slow tablets
+yb-admin --master_addresses ip1:7100,ip2:7100,ip3:7100 \
+  list_tablets <keyspace>.<table> 0 | grep LEADER
+```
+
+**Common Causes:**
+
+1. **Network Latency:**
+   - Check inter-node latency with `ping` and `iperf`
+   - Consider preferred zones for leader placement
+
+2. **Follower Node Overloaded:**
+   - Check CPU and disk utilization on follower
+   - Consider adding more nodes
+
+3. **Large Batches:**
+   - Monitor batch sizes in metrics
+   - Adjust `--consensus_max_batch_size_bytes`
+
+### Split-Brain Scenarios
+
+**Symptoms:**
+- Multiple masters claiming leadership
+- Inconsistent cluster state
+- Write failures
+
+**Diagnosis:**
+
+```bash
+# Check master leadership
+for master in ip1 ip2 ip3; do
+  echo "Checking $master:"
+  curl -s http://$master:7000/api/v1/is-leader
+done
+
+# Verify master quorum
+yb-admin --master_addresses ip1:7100,ip2:7100,ip3:7100 \
+  list_all_masters
+```
+
+**Resolution:**
+
+1. Check network partitions (firewall, switches)
+2. Verify NTP synchronization across all nodes
+3. If necessary, restart master processes in sequence
+4. In extreme cases, may need to rebuild master quorum
+
+## Disk Issues
+
+### Disk Space Running Out
+
+**Immediate Actions:**
+
+```bash
+# Check disk usage
+df -h
+
+# Run log cleanup
+./bin/log_cleanup.sh --logs_disk_percent_max 5
+
+# Clean core dumps
+rm /var/yugabyte/cores/*
+
+# Check for large WAL files
+du -sh /mnt/d*/yb-data/*/wals/*
+```
+
+**Identify Space Usage:**
+
+```bash
+# Find largest directories
+du -h /mnt/d0/yb-data | sort -rh | head -20
+
+# Check tablet sizes
+find /mnt/d0/yb-data/tserver/data -name "*.sst" -exec ls -lh {} \; | \
+  awk '{sum+=$5} END {print sum/(1024^3) " GB"}'
+```
+
+**Long-Term Solutions:**
+
+1. Expand disk capacity
+2. Add more nodes to distribute data
+3. Implement data retention policies
+4. Enable table TTL for time-series data
+5. Archive or drop old data
+
+### Disk I/O Errors
+
+**Symptoms:**
+- I/O error messages in logs
+- Failed tablets
+- Node crashes
+
+**Diagnosis:**
+
+```bash
+# Check system logs for disk errors
+dmesg | grep -i "error\|fail"
+grep -i "I/O error" /var/log/messages
+
+# Check SMART status
+sudo smartctl -a /dev/sda
+
+# Test disk health
+sudo badblocks -sv /dev/sda
+```
+
+**Resolution:**
+
+1. **If single disk failed:**
+   - Remove disk from fs_data_dirs
+   - Restart tserver
+   - Replace physical disk
+   - Add back to cluster
+
+2. **If critical disk failure:**
+   - Decommission entire node
+   - Replace hardware
+   - Re-add node to cluster
+
+## Connection Issues
+
+### Too Many Connections
+
+**Symptoms:**
+- "too many connections" errors
+- Connection timeouts
+- Unable to connect to database
+
+**Diagnosis:**
+
+```bash
+# Check current connections (YSQL)
+SELECT count(*) FROM pg_stat_activity;
+
+# Check connection limit
+SHOW max_connections;
+
+# View connection sources
+SELECT client_addr, count(*) 
+FROM pg_stat_activity 
+GROUP BY client_addr 
+ORDER BY count DESC;
+```
+
+**Solutions:**
+
+1. **Increase connection limit:**
+   ```bash
+   --ysql_max_connections=500
+   ```
+
+2. **Enable connection manager:**
+   ```bash
+   --enable_ysql_conn_mgr=true
+   --ysql_conn_mgr_max_client_connections=10000
+   ```
+
+3. **Implement connection pooling:**
+   - Use pgBouncer or application-level pooling
+   - Set appropriate pool sizes
+   - Configure connection timeouts
+
+4. **Kill idle connections:**
+   ```sql
+   -- Find long-idle connections
+   SELECT pid, usename, application_name, state, state_change
+   FROM pg_stat_activity
+   WHERE state = 'idle' 
+     AND state_change < now() - interval '1 hour';
+   
+   -- Terminate if needed
+   SELECT pg_terminate_backend(pid);
+   ```
+
+### SSL/TLS Connection Failures
+
+**Symptoms:**
+- "SSL error" messages
+- Connection refused with TLS
+
+**Diagnosis:**
+
+```bash
+# Test SSL connection
+openssl s_client -connect tserver-ip:5433 -starttls postgres
+
+# Check certificate validity
+openssl x509 -in /path/to/cert.crt -text -noout
+
+# Verify certificate chain
+openssl verify -CAfile ca.crt server.crt
+```
+
+**Common Issues:**
+
+1. Certificate expired
+2. Certificate hostname mismatch
+3. Missing intermediate certificates
+4. Incorrect certificate permissions (must be 0600)
+
+## Schema Issues
+
+### DDL Operation Stuck
+
+**Symptoms:**
+- CREATE/ALTER/DROP not completing
+- Table in transitional state
+
+**Diagnosis:**
+
+```bash
+# Check ongoing DDL operations
+yb-admin --master_addresses ip1:7100,ip2:7100,ip3:7100 \
+  list_tables include_table_id
+
+# Check master logs for DDL
+grep -i "create\|alter\|drop" /home/yugabyte/master/logs/yb-master.INFO
+
+# Look for backfill status (indexes)
+grep "backfill" /home/yugabyte/master/logs/yb-master.INFO
+```
+
+**Resolution:**
+
+Most DDL operations are asynchronous:
+- CREATE INDEX may take time for backfill
+- ALTER TABLE propagates across all tablets
+- DROP TABLE waits for snapshot retention
+
+If truly stuck:
+1. Check master leader status
+2. Review catalog manager state
+3. May need to restart master leader (last resort)
+
+## Monitoring and Metrics Issues
+
+### Metrics Endpoint Not Responding
+
+**Diagnosis:**
+
+```bash
+# Test endpoints
+curl -v http://tserver-ip:9000/metrics
+curl -v http://master-ip:7000/metrics
+
+# Check if service is running
+ps aux | grep yb-tserver
+netstat -tlnp | grep 9000
+
+# Check webserver logs
+grep -i "webserver" /home/yugabyte/tserver/logs/yb-tserver.INFO
+```
+
+**Solutions:**
+
+1. Verify webserver ports not blocked
+2. Check `--webserver_port` configuration
+3. Ensure `--webserver_interface` set correctly
+4. Restart service if needed
+
+### Prometheus Scraping Failures
+
+**Check Prometheus targets:**
+
+```
+http://prometheus:9090/targets
+```
+
+Look for DOWN targets and error messages.
+
+**Common fixes:**
+- Update target addresses in prometheus.yml
+- Check network connectivity from Prometheus host
+- Verify metrics_path matches endpoints
+- Increase scrape_timeout if needed
+
+## Backup and Restore Issues
+
+### Snapshot Creation Fails
+
+**Diagnosis:**
+
+```bash
+# Check snapshot status
+yb-admin --master_addresses ip1:7100,ip2:7100,ip3:7100 \
+  list_snapshots
+
+# View master logs
+grep -i "snapshot" /home/yugabyte/master/logs/yb-master.WARNING
+```
+
+**Common Causes:**
+
+1. **Insufficient disk space:**
+   - Snapshots use hardlinks but require directory space
+   - Solution: Free up disk space
+
+2. **Clock skew too high:**
+   - Solution: Fix NTP synchronization
+
+3. **Tablet not responding:**
+   - Solution: Check tablet health, increase timeout
+
+### Restore Failures
+
+**Common Issues:**
+
+1. **Namespace already exists:**
+   ```bash
+   # Drop existing namespace first
+   DROP DATABASE IF EXISTS target_db;
+   ```
+
+2. **Snapshot incomplete:**
+   - Verify snapshot state is COMPLETE
+   - Check all tablet replicas included
+
+3. **Version incompatibility:**
+   - Test restore in staging first
+   - Check release notes for breaking changes
+
+## Cluster Maintenance
+
+### Rolling Restart
+
+Perform rolling restarts to minimize downtime:
+
+```bash
+# 1. Restart TServers one at a time
+for tserver in tserver1 tserver2 tserver3; do
+  echo "Restarting $tserver"
+  ssh $tserver "yb-server-ctl tserver restart"
+  sleep 60  # Wait for node to rejoin
+  
+  # Verify node is back
+  yb-admin --master_addresses ip1:7100,ip2:7100,ip3:7100 \
+    list_all_tablet_servers | grep $tserver
+done
+
+# 2. Restart Masters one at a time
+for master in master1 master2 master3; do
+  echo "Restarting $master"
+  ssh $master "yb-server-ctl master restart"
+  sleep 60
+  
+  # Verify master rejoined
+  yb-admin --master_addresses ip1:7100,ip2:7100,ip3:7100 \
+    list_all_masters | grep $master
+done
+```
+
+**Best Practices:**
+- Restart followers before leaders
+- Wait for node to fully rejoin before next restart
+- Monitor cluster health between restarts
+- Avoid restarting during peak traffic
+
+### Upgrading Cluster
+
+Follow upgrade process carefully:
+
+1. Review release notes for breaking changes
+2. Test upgrade in staging environment
+3. Take full backup before upgrading
+4. Perform rolling upgrade (TServers then Masters)
+5. Verify functionality after each node
+6. Monitor for issues during upgrade window
+
+## Getting Help
+
+### Information to Gather
+
+When seeking support, collect:
+
+```bash
+# 1. Cluster configuration
+yb-admin --master_addresses ip1:7100,ip2:7100,ip3:7100 \
+  get_universe_config > universe_config.txt
+
+# 2. Node configurations
+cat /home/yugabyte/tserver/conf/server.conf
+cat /home/yugabyte/master/conf/server.conf
+
+# 3. Recent logs (last 1000 lines)
+tail -1000 /home/yugabyte/tserver/logs/yb-tserver.INFO
+tail -1000 /home/yugabyte/tserver/logs/yb-tserver.WARNING
+tail -1000 /home/yugabyte/tserver/logs/yb-tserver.ERROR
+
+# 4. Metrics snapshot
+curl http://tserver-ip:9000/metrics > metrics_snapshot.txt
+
+# 5. System information
+uname -a
+df -h
+free -h
+top -b -n 1
+```
+
+### Support Resources
+
+- **Documentation:** https://docs.yugabyte.com
+- **Community Slack:** https://yugabyte-db.slack.com
+- **GitHub Issues:** https://github.com/yugabyte/yugabyte-db/issues
+- **Support Portal:** For YugabyteDB customers
+
+## Next Steps
+
+- [Admin Guide](/operations/admin-guide) - Administrative tasks and tools
+- [Performance Tuning](/operations/performance-tuning) - Optimize cluster performance
+- [Monitoring](/operations/monitoring) - Set up proactive monitoring
+- [Backup and Restore](/operations/backup-restore) - Data protection strategies

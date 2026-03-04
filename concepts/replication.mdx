@@ -1,0 +1,514 @@
+---
+title: Replication
+description: How YugabyteDB replicates data using Raft consensus for fault tolerance
+---
+
+YugabyteDB uses the Raft consensus protocol to automatically replicate data across multiple nodes, ensuring high availability, fault tolerance, and data consistency without requiring operator intervention.
+
+## Raft Consensus Protocol
+
+Raft is a consensus algorithm designed to be understandable while providing the same guarantees as Paxos. The name "Raft" comes from thinking about logs and what can be built using them - and how to escape the island of Paxos complexity.
+
+<Info>
+YugabyteDB's Raft implementation is based on Apache Kudu's implementation, with enhancements including leader leases, group commits, and pre-voting during learner mode.
+</Info>
+
+### Why Raft?
+
+- **Understandable**: Designed for clarity and ease of understanding
+- **Proven**: Strong theoretical foundation and wide adoption
+- **Efficient**: Optimized for common cases with leader-based replication
+- **Safe**: Guarantees consistency even during failures and network partitions
+
+## Replication Architecture
+
+### Tablet Peers and Raft Groups
+
+Each tablet is replicated across multiple nodes as **tablet peers**. These peers form a **Raft group**:
+
+```
+Tablet 1 (RF=3)
+├─ Peer A (Leader)   - Node 1, Zone A
+├─ Peer B (Follower) - Node 2, Zone B  
+└─ Peer C (Follower) - Node 3, Zone C
+```
+
+<CardGroup cols={3}>
+  <Card title="Tablet Leader" icon="crown">
+    Handles all reads and writes, replicates to followers
+  </Card>
+  <Card title="Tablet Followers" icon="users">
+    Replicate data, participate in consensus, hot standbys
+  </Card>
+  <Card title="Raft Group" icon="layer-group">
+    All peers of a tablet forming a consensus group
+  </Card>
+</CardGroup>
+
+## Replication Factor
+
+The replication factor (RF) is the number of copies of data maintained by the cluster.
+
+### Common Configurations
+
+| RF | Fault Tolerance | Can Survive | Use Case |
+|----|-----------------|-------------|----------|
+| 1 | 0 | 0 failures | Development only |
+| 3 | 1 | 1 node failure | Production (most common) |
+| 5 | 2 | 2 node failures | Mission-critical |
+| 7 | 3 | 3 node failures | Maximum availability |
+
+**Formula**: To tolerate `f` failures, you need RF of `2f + 1`
+
+<Tip>
+RF=3 is recommended for production. It provides fault tolerance for 1 failure while maintaining a quorum with the remaining 2 nodes.
+</Tip>
+
+### Setting Replication Factor
+
+```bash
+# At cluster creation
+yb-ctl create --rf 3
+
+# Modify existing universe (via YBA or yb-admin)
+yb-admin modify_placement_info \  
+    cloud.region.zone1,cloud.region.zone2,cloud.region.zone3 3
+```
+
+## Raft Roles
+
+Nodes in a Raft group can take on three roles:
+
+### Leader
+
+- **Elected by majority vote** from followers
+- **Handles all writes** by appending to Raft log
+- **Serves consistent reads** (by default)
+- **Sends heartbeats** to maintain leadership
+- **Coordinates replication** to followers
+
+### Follower  
+
+- **Replicates log entries** from leader
+- **Participates in elections** by voting for candidates
+- **Can serve reads** with follower reads enabled
+- **Becomes candidate** if no heartbeat received
+- **Applies committed entries** to local storage
+
+### Candidate
+
+- **Transitional role** during leader election
+- **Requests votes** from other peers
+- **Becomes leader** if receives majority votes
+- **Returns to follower** if election fails
+
+<Info>
+Initially, all nodes start as followers. After an election timeout without hearing from a leader, a follower transitions to candidate and starts an election.
+</Info>
+
+## Write Replication Process
+
+Here's how a write operation is replicated:
+
+<Steps>
+  <Step title="Client Sends Write">
+    Client connects to any YB-TServer and sends write request
+  </Step>
+  
+  <Step title="Leader Acquires Locks">
+    Tablet leader acquires in-memory locks on affected keys
+  </Step>
+  
+  <Step title="Prepare Write Batch">
+    Leader prepares batch of DocDB changes (can include multiple operations)
+  </Step>
+  
+  <Step title="Assign Hybrid Timestamp">
+    Leader assigns hybrid timestamp from its HLC
+  </Step>
+  
+  <Step title="Append to Raft Log">
+    Leader appends entry to its Raft log and sends to followers
+  </Step>
+  
+  <Step title="Followers Append">
+    Followers append entry to their Raft logs and send acknowledgment
+  </Step>
+  
+  <Step title="Achieve Majority">
+    Once majority (including leader) has appended, entry is committed
+  </Step>
+  
+  <Step title="Apply to DocDB">
+    Leader applies write batch to its local RocksDB
+  </Step>
+  
+  <Step title="Return Success">
+    Leader returns success to client (write is now durable)
+  </Step>
+  
+  <Step title="Followers Apply">
+    Followers asynchronously apply committed entry to their RocksDB
+  </Step>
+</Steps>
+
+<Warning>
+A write is considered committed and durable once it's replicated to a majority of peers, even if not all followers have applied it yet.
+</Warning>
+
+## Leader Election
+
+When a leader fails or a new Raft group is formed, peers elect a new leader.
+
+### Election Process
+
+<Steps>
+  <Step title="Detect Leader Failure">
+    Follower doesn't receive heartbeat within election timeout (typically 2-3 seconds)
+  </Step>
+  
+  <Step title="Become Candidate">
+    Follower increments its term number and transitions to candidate role
+  </Step>
+  
+  <Step title="Request Votes">
+    Candidate votes for itself and sends RequestVote RPCs to all peers
+  </Step>
+  
+  <Step title="Peers Vote">
+    Each peer votes for at most one candidate per term (first-come-first-served)
+  </Step>
+  
+  <Step title="Win Election">
+    Candidate receiving majority votes becomes the new leader
+  </Step>
+  
+  <Step title="Send Heartbeats">
+    New leader immediately sends heartbeats to all followers
+  </Step>
+  
+  <Step title="Wait Out Lease">
+    New leader waits for old leader's lease to expire before serving requests
+  </Step>
+</Steps>
+
+### Election Terms
+
+Each election increments the **term number**:
+
+```
+Term 1: Leader A elected, serves requests
+Term 2: Leader A fails, Leader B elected
+Term 3: Network partition, election fails, retry
+Term 4: Leader B re-elected
+```
+
+- Terms are monotonically increasing
+- Requests from leaders with stale terms are rejected
+- Helps detect outdated leaders after network partitions
+
+<Note>
+If no candidate wins a majority (split vote), a new election starts for the next term after another timeout.
+</Note>
+
+## Raft Enhancements in YugabyteDB
+
+YugabyteDB includes several optimizations beyond basic Raft:
+
+### Leader Leases
+
+Leader leases eliminate the need for read-time heartbeats, reducing read latency.
+
+**How it works:**
+
+1. Leader computes lease interval (default: 2 seconds)
+2. Leader sends lease interval to followers via Raft replication
+3. Followers start countdown after RPC delay
+4. Leader can serve reads without heartbeat during lease
+5. Old leader steps down when lease expires
+6. New leader waits out old lease before serving
+
+**Benefits:**
+- Significantly lower read latency (no network round-trip)
+- No heartbeat required for each read
+- Still maintains safety during failures
+
+**Tradeoff:**
+- Small unavailability window during failover (~lease duration)
+- Window bounded by: `max_clock_drift * lease_interval + rpc_delay`
+
+<Tip>
+Leader leases are critical for performance in geo-distributed deployments where heartbeat latency would be high (100ms+).
+</Tip>
+
+### Group Commits
+
+Batching multiple client operations into a single Raft log entry:
+
+```
+Without group commit:
+Op1 -> Raft Entry 1 -> Replicate
+Op2 -> Raft Entry 2 -> Replicate  
+Op3 -> Raft Entry 3 -> Replicate
+
+With group commit:
+Op1 + Op2 + Op3 -> Single Raft Entry -> Replicate once
+```
+
+**Benefits:**
+- Higher write throughput (fewer Raft rounds)
+- Better network utilization (larger batches)
+- Reduced per-operation overhead
+
+**Implementation:**
+- Operations ordered by (term, index, op_id)
+- Incoming operations grouped while one batch replicates
+- Next batch formed from pending operations
+
+### Leader Balancing
+
+YugabyteDB automatically balances tablet leaders across nodes:
+
+```
+Before balancing:
+Node 1: 100 leaders, 50 followers
+Node 2: 20 leaders, 80 followers  
+Node 3: 30 leaders, 120 followers
+
+After balancing:
+Node 1: 50 leaders, 100 followers
+Node 2: 50 leaders, 100 followers
+Node 3: 50 leaders, 100 followers
+```
+
+- Distributes read/write load evenly
+- Throttled to avoid impacting foreground operations
+- Considers zone/region placement for geo-distribution
+
+### Affinitized Leaders (Preferred Regions)
+
+Pin tablet leaders to specific regions for lower write latency:
+
+```yaml
+# Preferred region: us-west (priority 1)
+cloud.region.us-west.zone.a: priority=1
+cloud.region.us-west.zone.b: priority=1
+cloud.region.us-east.zone.a: priority=2
+cloud.region.eu-west.zone.a: priority=3
+```
+
+- All writes go to preferred region (low latency)
+- Synchronous replication to other regions (durability)
+- Follower reads in non-preferred regions (read scaling)
+
+## Multi-Zone Deployment
+
+Typical 3-zone deployment with RF=3:
+
+```
+Zone A          Zone B          Zone C
+┌────────┐      ┌────────┐      ┌────────┐
+│ Node 1 │      │ Node 2 │      │ Node 3 │
+├────────┤      ├────────┤      ├────────┤
+│ T1-L   │      │ T1-F   │      │ T1-F   │
+│ T2-F   │      │ T2-L   │      │ T2-F   │  
+│ T3-F   │      │ T3-F   │      │ T3-L   │
+│ T4-L   │      │ T4-F   │      │ T4-F   │
+└────────┘      └────────┘      └────────┘
+
+T1-L = Tablet 1 Leader
+T1-F = Tablet 1 Follower
+```
+
+### Zone Outage Handling
+
+<Steps>
+  <Step title="Zone Fails">
+    Entire zone becomes unreachable (e.g., Zone C fails)
+  </Step>
+  
+  <Step title="Leaders Failover">
+    Tablets with leaders in Zone C elect new leaders in Zones A/B
+  </Step>
+  
+  <Step title="Quorum Maintained">
+    Zones A and B form majority (2 out of 3), cluster remains operational
+  </Step>
+  
+  <Step title="Balanced Redistribution">
+    New leaders distributed evenly across surviving zones
+  </Step>
+  
+  <Step title="RPO = 0">
+    No data loss (all committed writes were on majority)
+  </Step>
+  
+  <Step title="RTO ≈ 3s">
+    Recovery time ~3 seconds (leader election timeout)
+  </Step>
+</Steps>
+
+<Info>
+**RPO (Recovery Point Objective)**: Zero data loss due to synchronous replication
+
+**RTO (Recovery Time Objective)**: ~3 seconds for automatic failover
+</Info>
+
+## Follower Reads
+
+By default, only leaders serve reads for linearizability. Follower reads provide:
+
+- **Lower latency**: Read from geographically closer followers
+- **Higher throughput**: Distribute reads across all replicas
+- **Timeline consistency**: Monotonic, causally-consistent reads
+- **Bounded staleness**: Configurable maximum staleness
+
+### Enabling Follower Reads
+
+```sql
+-- YSQL
+SET yb_read_from_followers = true;
+SET yb_follower_read_staleness_ms = 30000; -- 30 seconds max staleness
+
+SELECT * FROM products WHERE category = 'electronics';
+-- May read from local follower if within staleness bound
+```
+
+```cql
+-- YCQL
+SELECT * FROM products WHERE category = 'electronics' 
+USING FOLLOWER READ;
+```
+
+<Warning>
+Follower reads provide timeline consistency, not linearizability. Don't use for operations requiring absolute latest data (e.g., read-modify-write).
+</Warning>
+
+## Read Replicas
+
+Read replicas are async replicas that don't participate in Raft consensus:
+
+```
+Primary Cluster (RF=3)    Read Replica Cluster (RF=1)
+┌──────────────────┐      ┌──────────────────┐
+│ Zone A, B, C     │──────>│ Remote Region    │
+│ (Sync Raft)      │ Async │ (Raft Observer)  │
+└──────────────────┘      └──────────────────┘
+```
+
+**Use cases:**
+- Serve reads in distant regions with lower latency
+- Analytics workloads on separate infrastructure  
+- Compliance (data locality requirements)
+- Disaster recovery (asynchronous replication)
+
+**Characteristics:**
+- Do NOT participate in primary cluster voting
+- Asynchronously replicate from primary via Raft observer
+- Can have their own RF for local availability
+- Always require follower reads to be enabled
+
+## Monitoring Replication
+
+Key metrics to monitor:
+
+```sql
+-- Check Raft lag per tablet
+SELECT tablet_id, 
+       majority_replicated_op_id,
+       committed_op_id,
+       majority_replicated_op_id - committed_op_id AS lag
+FROM yb_local_tablets;
+
+-- Check follower lag in milliseconds  
+SELECT tablet_id,
+       follower_lag_ms,
+       is_leader
+FROM yb_replication_status
+WHERE follower_lag_ms > 1000; -- Followers lagging >1s
+
+-- Monitor under-replicated tablets
+SELECT COUNT(*) 
+FROM yb_local_tablets
+WHERE num_replicas < replication_factor;
+```
+
+## Replication Performance
+
+<AccordionGroup>
+  <Accordion title="Latency Impact">
+    - **Single-zone (same DC)**: 1-3ms replication latency
+    - **Multi-zone (same region)**: 5-10ms replication latency
+    - **Multi-region**: 50-300ms replication latency (depends on distance)
+    - **Majority required**: Write latency determined by 2nd fastest replica (RF=3)
+  </Accordion>
+  
+  <Accordion title="Throughput Scaling">
+    - **Writes**: Limited by leader capacity, scale by adding tablets
+    - **Reads**: Scale linearly with followers (if follower reads enabled)
+    - **Network**: Replication consumes bandwidth (RF-1 copies per write)
+    - **Group commits**: Batch operations for higher throughput
+  </Accordion>
+  
+  <Accordion title="Failure Recovery">
+    - **Leader failure**: 2-3 second failover (election timeout)
+    - **Follower failure**: No impact on availability or latency
+    - **Re-replication**: Automatic when node permanently fails
+    - **Tablet splitting**: Load automatically balanced to new tablets
+  </Accordion>
+</AccordionGroup>
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Choose Appropriate RF" icon="users">
+    Use RF=3 for production, RF=5 for mission-critical, never RF=2 (no benefit over RF=3)
+  </Card>
+  
+  <Card title="Distribute Across Zones" icon="map">
+    Place replicas in different zones/regions for true fault tolerance
+  </Card>
+  
+  <Card title="Use Follower Reads" icon="book-open">
+    Enable for read-heavy workloads and analytics to reduce leader load
+  </Card>
+  
+  <Card title="Monitor Replication Lag" icon="chart-line">
+    Alert on high lag indicating slow followers or network issues
+  </Card>
+  
+  <Card title="Set Preferred Regions" icon="globe">
+    Pin leaders near application servers for lower write latency
+  </Card>
+  
+  <Card title="Plan for Failures" icon="shield">
+    Design for graceful degradation when zones fail
+  </Card>
+</CardGroup>
+
+## Replication vs xCluster
+
+| Feature | Raft Replication | xCluster Replication |
+|---------|------------------|----------------------|
+| Consistency | Synchronous (strong) | Asynchronous (eventual) |
+| Scope | Within universe | Between universes |
+| Use case | HA, fault tolerance | DR, multi-DC active-active |
+| Latency impact | Yes (majority quorum) | No (async) |
+| Conflict resolution | No conflicts (single source) | Application-defined |
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Consistency Model" icon="check-double" href="/concepts/consistency-model">
+    Understand how replication ensures consistency
+  </Card>
+  <Card title="Distributed Transactions" icon="arrows-rotate" href="/concepts/distributed-transactions">
+    Learn how transactions work across replicas
+  </Card>
+  <Card title="Architecture" icon="sitemap" href="/concepts/architecture">
+    Review the overall system architecture
+  </Card>
+  <Card title="Data Model" icon="table" href="/concepts/data-model">
+    See how data is stored in each replica
+  </Card>
+</CardGroup>
